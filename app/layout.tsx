@@ -1,22 +1,17 @@
+import React from "react";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Navbar } from "@/components/navbar";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const _geist = Geist({ subsets: ["latin"] });
+const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "BasoBas",
-  description: "A web app for finding and posting room rentals",
+  title: "BasoBas - Find Your Perfect Rental Home",
+  description:
+    "Your premier destination for finding the perfect rental accommodation. Connect with landlords and find rooms, apartments, and more.",
 };
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -24,10 +19,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+      <body className={`font-sans antialiased`}>
+        <Navbar />
+        <main className="min-h-screen">{children}</main>
       </body>
     </html>
   );
