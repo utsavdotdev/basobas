@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
-  const [user, setUser] = useState();
+  const [user, setUser] = useState<any>();
   const [selectedRole, setSelectedRole] = useState<
     "tenant" | "landlord" | null
   >(null);
