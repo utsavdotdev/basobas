@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,36 +24,17 @@ import { Menu, X, User, LogOut, Heart, Home, Plus, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
+  const { user, login, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
-  const [user, setUser] = useState<any>();
   const [selectedRole, setSelectedRole] = useState<
     "tenant" | "landlord" | null
   >(null);
   const pathname = usePathname();
-  const route = useRouter();
-
-  const logout = () => {
-    setUser(null);
-    route.push("/");
-  };
 
   const handleLogin = () => {
     if (selectedRole) {
-      setUser({
-        id: `user_${Date.now()}`,
-        name: selectedRole === "tenant" ? "Utsav Bhattarai" : "Roshan Acharya",
-        email:
-          selectedRole === "tenant"
-            ? "utsavdotdev@gmail.com"
-            : "roshanacharya@gmail.com",
-        avatar:
-          selectedRole === "tenant"
-            ? "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80"
-            : "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&q=80",
-        role: selectedRole,
-        verified: false,
-      });
+      login(selectedRole);
       setLoginDialogOpen(false);
       setSelectedRole(null);
     }
