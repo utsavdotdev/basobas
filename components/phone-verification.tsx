@@ -38,7 +38,7 @@ export function PhoneVerification({
   onVerify,
 }: PhoneVerificationProps) {
   const [step, setStep] = useState<"idle" | "phone" | "otp">("idle");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState<string>("");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -203,10 +203,12 @@ export function PhoneVerification({
                         placeholder="9847501234"
                         value={phoneNumber}
                         onChange={(e) => {
-                          setPhoneNumber(e.target.value.replace(/\D/g, ""));
+                          setPhoneNumber(
+                            e.target.value.replace(/\D/g, "").toString(),
+                          );
                           setVerificationError("");
                         }}
-                        maxLength="10"
+                        maxLength={10}
                         className="flex-1"
                         aria-label="Phone number"
                         aria-describedby="phone-desc"
