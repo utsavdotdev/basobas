@@ -11,6 +11,14 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Calendar } from "@/components/ui/calendar";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -44,7 +52,7 @@ import {
   ArrowLeft,
   CalendarIcon,
 } from "lucide-react";
-import { format, addMonths } from "date-fns";
+import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
 // Default room images for fallback
@@ -68,20 +76,33 @@ export default function RoomDetailPage() {
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [bookingConfirmed, setBookingConfirmed] = useState(false);
-  const [checkInDate, setCheckInDate] = useState<Date>();
-  const [checkOutDate, setCheckOutDate] = useState<Date>();
+  const [moveInDate, setMoveInDate] = useState<Date>();
+  const [stayDurationMonths, setStayDurationMonths] = useState<number | null>(
+    null,
+  );
+  const [tenantMessage, setTenantMessage] = useState("");
+  const [showDuplicateRequestDialog, setShowDuplicateRequestDialog] =
+    useState(false);
 
   const allRooms = useMemo(() => {
     return [...mockRooms, ...postedRooms];
   }, [postedRooms]);
 
-  const room = allRooms.find((r) => r.id === params.id);
+  const roomIdParam = Array.isArray(params.id) ? params.id[0] : params.id;
+  let room = allRooms.find((r) => r.id === roomIdParam);
+  if (!room && roomIdParam?.startsWith("hardcoded_landlord_listing_")) {
+    const legacyIndex = Number(roomIdParam.split("_").pop());
+    if (!Number.isNaN(legacyIndex) && legacyIndex > 0) {
+      room = mockRooms[legacyIndex - 1];
+    }
+  }
 
   if (!room) {
     notFound();
   }
 
   const isFavorite = favorites.includes(room.id);
+  const isLandlordUser = user?.role === "landlord";
 
   // Get valid images with fallback
   const roomImages = useMemo(() => {
@@ -115,27 +136,38 @@ export default function RoomDetailPage() {
       setShowLoginPrompt(true);
       return;
     }
+    if (isLandlordUser || user.id === room.landlord.id) {
+      return;
+    }
     if (!user.verified) {
       setShowVerificationRequired(true);
       return;
     }
-    // Set default dates
     const today = new Date();
-    setCheckInDate(today);
-    setCheckOutDate(addMonths(today, 1));
+    setMoveInDate(today);
+    setStayDurationMonths(12);
+    setTenantMessage("");
     setShowBookingDialog(true);
   };
 
   const handleConfirmBooking = () => {
-    if (!checkInDate || !checkOutDate || !user) return;
+    if (!moveInDate || !stayDurationMonths || !user) return;
 
-    addBooking({
+    const bookingCreated = addBooking({
       roomId: room.id,
       userId: user.id,
-      checkIn: checkInDate.toISOString(),
-      checkOut: checkOutDate.toISOString(),
-      status: "confirmed",
+      landlordId: room.landlord.id,
+      tenantName: user.name,
+      tenantEmail: user.email,
+      tenantPhone: user.phone || "",
+      tenantMessage: tenantMessage.trim() || undefined,
+      moveInDate: moveInDate.toISOString(),
+      stayDurationMonths,
     });
+    if (!bookingCreated) {
+      setShowDuplicateRequestDialog(true);
+      return;
+    }
 
     setBookingConfirmed(true);
   };
@@ -144,7 +176,7 @@ export default function RoomDetailPage() {
     setShowBookingDialog(false);
     if (bookingConfirmed) {
       setBookingConfirmed(false);
-      router.push("/profile?tab=bookings");
+      router.push("/profile?tab=requests");
     }
   };
 
@@ -302,8 +334,15 @@ export default function RoomDetailPage() {
             {/* Action Buttons */}
             <div className="rounded-xl border p-6">
               <div className="space-y-3">
-                <Button className="w-full" size="lg" onClick={handleBookClick}>
-                  Book This Room
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={handleBookClick}
+                  disabled={isLandlordUser || user?.id === room.landlord.id}
+                >
+                  {isLandlordUser || user?.id === room.landlord.id
+                    ? "Landlords Cannot Book"
+                    : "Request to Rent"}
                 </Button>
                 <Button
                   variant="outline"
@@ -321,7 +360,13 @@ export default function RoomDetailPage() {
               </div>
               {!user && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Login to book or save this room
+                  Login to request or save this room
+                </p>
+              )}
+              {isLandlordUser && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  Landlord accounts can only manage listings and incoming
+                  tenant requests.
                 </p>
               )}
             </div>
@@ -334,12 +379,12 @@ export default function RoomDetailPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {bookingConfirmed ? "Booking Confirmed!" : "Confirm Booking"}
+              {bookingConfirmed ? "Request Submitted" : "Send Rental Request"}
             </DialogTitle>
             <DialogDescription>
               {bookingConfirmed
-                ? "Your booking has been confirmed successfully."
-                : `You are about to book "${room.title}" for $${room.price}/month.`}
+                ? "Your request is now pending landlord review."
+                : `Request "${room.title}" for long-term stay at $${room.price}/month.`}
             </DialogDescription>
           </DialogHeader>
           {bookingConfirmed ? (
@@ -348,70 +393,76 @@ export default function RoomDetailPage() {
                 <CheckCircle2 className="h-8 w-8 text-green-600" />
               </div>
               <p className="mt-4 text-center text-muted-foreground">
-                You can view your booking in your profile.
+                The landlord will approve or reject this request from their
+                dashboard. You can track status in your profile.
               </p>
             </div>
           ) : (
             <div className="space-y-4 py-4">
-              {/* Date Selection */}
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Check-in Date</Label>
+                  <Label>Preferred Move-in Date</Label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
                         className={cn(
                           "w-full justify-start bg-transparent text-left font-normal",
-                          !checkInDate && "text-muted-foreground",
+                          !moveInDate && "text-muted-foreground",
                         )}
                       >
                         <CalendarIcon className="mr-2 h-4 w-4" />
-                        {checkInDate
-                          ? format(checkInDate, "PPP")
+                        {moveInDate
+                          ? format(moveInDate, "PPP")
                           : "Pick a date"}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
                       <Calendar
                         mode="single"
-                        selected={checkInDate}
-                        onSelect={setCheckInDate}
+                        selected={moveInDate}
+                        onSelect={setMoveInDate}
                         disabled={(date) => date < new Date()}
                       />
                     </PopoverContent>
                   </Popover>
                 </div>
                 <div className="space-y-2">
-                  <Label>Check-out Date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn(
-                          "w-full justify-start bg-transparent text-left font-normal",
-                          !checkOutDate && "text-muted-foreground",
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {checkOutDate
-                          ? format(checkOutDate, "PPP")
-                          : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={checkOutDate}
-                        onSelect={setCheckOutDate}
-                        disabled={(date) => date < (checkInDate || new Date())}
-                      />
-                    </PopoverContent>
-                  </Popover>
+                  <Label>Intended Stay</Label>
+                  <Select
+                    value={stayDurationMonths?.toString()}
+                    onValueChange={(value) => setStayDurationMonths(Number(value))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select duration" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="3">3 months</SelectItem>
+                      <SelectItem value="6">6 months</SelectItem>
+                      <SelectItem value="12">12 months</SelectItem>
+                      <SelectItem value="24">24 months</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
-              {/* Cost Breakdown */}
+              <div className="space-y-2">
+                <Label htmlFor="tenant-message">
+                  Message to landlord (optional)
+                </Label>
+                <Textarea
+                  id="tenant-message"
+                  value={tenantMessage}
+                  onChange={(event) => setTenantMessage(event.target.value)}
+                  placeholder="Tell the landlord about yourself, move-in timing, or any special request."
+                  rows={4}
+                  maxLength={500}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {tenantMessage.length}/500
+                </p>
+              </div>
+
               <div className="rounded-lg bg-muted p-4">
                 <div className="flex justify-between">
                   <span>Monthly Rent</span>
@@ -423,16 +474,20 @@ export default function RoomDetailPage() {
                 </div>
                 <div className="mt-3 border-t pt-3">
                   <div className="flex justify-between font-semibold">
-                    <span>Total Due at Move-in</span>
+                    <span>Estimated Due at Move-in</span>
                     <span>${room.price * 2}</span>
                   </div>
                 </div>
               </div>
+
+              <p className="text-sm text-muted-foreground">
+                Your request stays pending until the landlord responds.
+              </p>
             </div>
           )}
           <DialogFooter>
             {bookingConfirmed ? (
-              <Button onClick={handleBookingClose}>View My Bookings</Button>
+              <Button onClick={handleBookingClose}>View My Requests</Button>
             ) : (
               <>
                 <Button
@@ -443,9 +498,9 @@ export default function RoomDetailPage() {
                 </Button>
                 <Button
                   onClick={handleConfirmBooking}
-                  disabled={!checkInDate || !checkOutDate}
+                  disabled={!moveInDate || !stayDurationMonths}
                 >
-                  Confirm Booking
+                  Submit Request
                 </Button>
               </>
             )}
@@ -459,7 +514,8 @@ export default function RoomDetailPage() {
           <DialogHeader>
             <DialogTitle>Login Required</DialogTitle>
             <DialogDescription>
-              Please login to book rooms or add them to your favorites.
+              Please login to send rental requests or add rooms to your
+              favorites.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -468,6 +524,27 @@ export default function RoomDetailPage() {
             </Button>
             <Button onClick={() => setShowLoginPrompt(false)}>
               Go to Login
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showDuplicateRequestDialog}
+        onOpenChange={setShowDuplicateRequestDialog}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Request Already Exists</DialogTitle>
+            <DialogDescription>
+              You already have an active request for this room. Please wait for
+              the landlord response or cancel your existing request from your
+              profile.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setShowDuplicateRequestDialog(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -482,8 +559,8 @@ export default function RoomDetailPage() {
           <DialogHeader>
             <DialogTitle>Phone Verification Required</DialogTitle>
             <DialogDescription>
-              Please verify your phone number before booking a room. This helps
-              us ensure secure transactions.
+              Please verify your phone number before sending a rental request.
+              This helps us ensure secure transactions.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

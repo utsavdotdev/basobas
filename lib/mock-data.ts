@@ -233,9 +233,9 @@ export const features = [
     icon: "message",
   },
   {
-    title: "Flexible Bookings",
+    title: "Long-Term Rentals",
     description:
-      "Book for short or long term stays with flexible cancellation policies.",
+      "Send long-term rental requests with preferred move-in dates and stay duration.",
     icon: "calendar",
   },
   {

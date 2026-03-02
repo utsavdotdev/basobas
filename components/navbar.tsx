@@ -270,7 +270,7 @@ export function Navbar() {
                 <Home className="h-6 w-6" />
                 <span className="text-sm font-medium">Looking for a Room</span>
                 <span className="text-xs text-muted-foreground">
-                  Browse and book rentals
+                  Browse and request long-term rentals
                 </span>
               </button>
               <button
@@ -288,7 +288,7 @@ export function Navbar() {
                   </div>
                 )}
                 <Plus className="h-6 w-6" />
-                <span className="text-sm font-medium">I'm a Landlord</span>
+                <span className="text-sm font-medium">I am a Landlord</span>
                 <span className="text-xs text-muted-foreground">
                   List your properties
                 </span>
