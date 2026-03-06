@@ -22,6 +22,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Menu, X, User, LogOut, Heart, Home, Plus, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ENABLE_FAVORITES } from "@/lib/launch-flags";
 
 export function Navbar() {
   const { user, login, logout } = useAuth();
@@ -151,7 +152,7 @@ export function Navbar() {
                         Profile
                       </Link>
                     </DropdownMenuItem>
-                    {user.role === "tenant" && (
+                    {ENABLE_FAVORITES && user.role === "tenant" && (
                       <DropdownMenuItem asChild>
                         <Link
                           href="/profile?tab=favorites"

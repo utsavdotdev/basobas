@@ -18,13 +18,10 @@ BasoBas now uses **Supabase-only backend infrastructure**.
 
 ## Quick Start
 
-1. Create `.env.local`:
+1. Create local env file from template:
 
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
-# Optional backward-compatible alias if you already use this:
-# NEXT_PUBLIC_SUPABASE_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
+```bash
+cp .env.example .env.local
 ```
 
 2. Install dependencies:
@@ -62,3 +59,27 @@ supabase db push
   - `https://your-production-domain.com/auth/callback`
 
 After this, users can choose `tenant` or `landlord` in the login modal and continue with Google OAuth.
+
+## Vercel Environment Setup
+
+Set these in `Vercel -> Project -> Settings -> Environment Variables`.
+
+Required:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `PHONE_OTP_PEPPER`
+
+Optional:
+- `PHONE_OTP_MODE` (`simulate` or `webhook`, defaults to `simulate`)
+- `PHONE_OTP_SMS_WEBHOOK_URL` (required when `PHONE_OTP_MODE=webhook`)
+- `PHONE_OTP_SMS_WEBHOOK_TOKEN` (optional auth token for webhook)
+- `NEXT_PUBLIC_SUPABASE_KEY` (legacy alias for anon key)
+
+Recommended Vercel scopes:
+- Add all required vars to `Production`, `Preview`, and `Development`.
+- Use `PHONE_OTP_MODE=webhook` in `Production`.
+- Keep `PHONE_OTP_MODE=simulate` only for prototype/testing environments.
+
+After adding/updating env vars:
+1. Trigger a redeploy from Vercel dashboard, or
+2. Push a new commit to your connected branch.

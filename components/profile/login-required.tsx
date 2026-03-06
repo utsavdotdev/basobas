@@ -15,7 +15,7 @@ export function LoginRequired({ onGoHome }: LoginRequiredProps) {
       </div>
       <h1 className="mt-6 text-2xl font-bold">Login Required</h1>
       <p className="mt-2 max-w-md text-muted-foreground">
-        Please login to view your profile, favorites, and manage your listings.
+        Please login to view your profile and manage your listings.
       </p>
       <Button className="mt-6" onClick={onGoHome}>
         Go to Home

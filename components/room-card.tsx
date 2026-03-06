@@ -24,6 +24,7 @@ import {
   Home,
 } from "lucide-react";
 import { formatNPR } from "@/lib/currency";
+import { ENABLE_FAVORITES } from "@/lib/launch-flags";
 
 const defaultRoomImages = [
   "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800&q=80",
@@ -42,11 +43,14 @@ interface RoomCardProps {
 export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
   const { user, favorites, addFavorite, removeFavorite } = useAuth();
   const isFavorite = favorites.includes(room.id);
-  const canUseFavorites = user?.role === "tenant";
+  const canUseFavorites = ENABLE_FAVORITES && user?.role === "tenant";
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!ENABLE_FAVORITES) {
+      return;
+    }
     if (user?.role === "landlord") {
       return;
     }

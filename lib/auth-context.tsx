@@ -18,6 +18,7 @@ import {
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
 import { normalizeNepaliPhone } from "@/lib/phone";
+import { ENABLE_BOOKING_REQUESTS, ENABLE_FAVORITES } from "@/lib/launch-flags";
 
 export type BookingStatus = "pending" | "approved" | "rejected" | "cancelled";
 
@@ -409,7 +410,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const savedBookings = localStorage.getItem(BOOKING_STORAGE_KEY);
     const savedLandlordSnapshots = readLandlordSnapshotsFromStorage();
 
-    if (savedFavorites) {
+    if (ENABLE_FAVORITES && savedFavorites) {
       try {
         const parsedFavorites = JSON.parse(savedFavorites);
         if (Array.isArray(parsedFavorites)) {
@@ -423,6 +424,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         localStorage.removeItem(FAVORITES_STORAGE_KEY);
       }
+    } else if (!ENABLE_FAVORITES) {
+      localStorage.removeItem(FAVORITES_STORAGE_KEY);
     }
     if (Object.keys(savedLandlordSnapshots).length > 0) {
       setLandlordSnapshotsByUserId(savedLandlordSnapshots);
@@ -451,7 +454,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem(POSTED_ROOMS_STORAGE_KEY);
       }
     }
-    if (savedBookings) {
+    if (ENABLE_BOOKING_REQUESTS && savedBookings) {
       try {
         const parsedBookings = JSON.parse(savedBookings);
         if (Array.isArray(parsedBookings)) {
@@ -464,6 +467,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         localStorage.removeItem(BOOKING_STORAGE_KEY);
       }
+    } else if (!ENABLE_BOOKING_REQUESTS) {
+      localStorage.removeItem(BOOKING_STORAGE_KEY);
     }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -542,7 +547,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (!user || user.role !== "tenant") {
+    if (!ENABLE_FAVORITES || !user || user.role !== "tenant") {
       localStorage.removeItem(FAVORITES_STORAGE_KEY);
       return;
     }
@@ -667,7 +672,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isMounted) {
         setUser(nextUser);
-        if (nextUser.role !== "tenant") {
+        if (!ENABLE_FAVORITES || nextUser.role !== "tenant") {
           setFavorites([]);
           localStorage.removeItem(FAVORITES_STORAGE_KEY);
         }
@@ -800,6 +805,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const addFavorite = (roomId: string) => {
     if (
+      !ENABLE_FAVORITES ||
       !isUuid(roomId) ||
       !user ||
       user.role !== "tenant" ||
@@ -842,6 +848,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const removeFavorite = (roomId: string) => {
     if (
+      !ENABLE_FAVORITES ||
       !isUuid(roomId) ||
       !user ||
       user.role !== "tenant" ||
@@ -955,6 +962,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const addBooking = (booking: NewBookingInput) => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return false;
+    }
+
     const hasActiveRequest = bookings.some(
       (existingBooking) =>
         existingBooking.roomId === booking.roomId &&
@@ -979,6 +990,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const cancelBooking = (bookingId: string) => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return;
+    }
+
     const newBookings = bookings.map((b) =>
       b.id === bookingId ? { ...b, status: "cancelled" as const } : b,
     );
@@ -991,6 +1006,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     status: "approved" | "rejected",
     reviewMessage?: string,
   ) => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return;
+    }
+
     const reviewedAt = new Date().toISOString();
     const newBookings = bookings.map((b) =>
       b.id === bookingId

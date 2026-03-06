@@ -13,6 +13,7 @@ import { TenantFavoritesTab } from "@/components/profile/tenant-favorites-tab";
 import { LandlordRequestsTab } from "@/components/profile/landlord-requests-tab";
 import { LandlordListingsTab } from "@/components/profile/landlord-listings-tab";
 import type { RequestWithRoom } from "@/components/profile/types";
+import { ENABLE_BOOKING_REQUESTS, ENABLE_FAVORITES } from "@/lib/launch-flags";
 
 function ProfileContent() {
   const searchParams = useSearchParams();
@@ -79,7 +80,9 @@ function ProfileContent() {
   }
 
   const defaultTab =
-    user.role === "landlord" && requestedTab === "favorites"
+    ((!ENABLE_BOOKING_REQUESTS && requestedTab === "requests") ||
+      (!ENABLE_FAVORITES && requestedTab === "favorites") ||
+      (user.role === "landlord" && requestedTab === "favorites"))
       ? "profile"
       : requestedTab;
 
@@ -90,9 +93,13 @@ function ProfileContent() {
       <Tabs defaultValue={defaultTab} className="space-y-6">
         <ProfileTabsList
           role={user.role}
-          tenantRequestsCount={tenantRequestsWithRoom.length}
-          favoritesCount={favorites.length}
-          landlordRequestsCount={incomingRequestsWithRoom.length}
+          tenantRequestsCount={
+            ENABLE_BOOKING_REQUESTS ? tenantRequestsWithRoom.length : 0
+          }
+          favoritesCount={ENABLE_FAVORITES ? favorites.length : 0}
+          landlordRequestsCount={
+            ENABLE_BOOKING_REQUESTS ? incomingRequestsWithRoom.length : 0
+          }
           landlordListingsCount={landlordListings.length}
         />
 
@@ -100,20 +107,24 @@ function ProfileContent() {
 
         {user.role === "tenant" && (
           <>
-            <TenantRequestsTab
-              requests={tenantRequestsWithRoom}
-              onCancelBooking={cancelBooking}
-            />
-            <TenantFavoritesTab favoriteRooms={favoriteRooms} />
+            {ENABLE_BOOKING_REQUESTS && (
+              <TenantRequestsTab
+                requests={tenantRequestsWithRoom}
+                onCancelBooking={cancelBooking}
+              />
+            )}
+            {ENABLE_FAVORITES && <TenantFavoritesTab favoriteRooms={favoriteRooms} />}
           </>
         )}
 
         {user.role === "landlord" && (
           <>
-            <LandlordRequestsTab
-              requests={incomingRequestsWithRoom}
-              onUpdateBookingStatus={updateBookingStatus}
-            />
+            {ENABLE_BOOKING_REQUESTS && (
+              <LandlordRequestsTab
+                requests={incomingRequestsWithRoom}
+                onUpdateBookingStatus={updateBookingStatus}
+              />
+            )}
             <LandlordListingsTab landlordListings={landlordListings} />
           </>
         )}

@@ -57,6 +57,7 @@ import {
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { formatNPR } from "@/lib/currency";
+import { ENABLE_BOOKING_REQUESTS, ENABLE_FAVORITES } from "@/lib/launch-flags";
 
 const defaultRoomImages = [
   "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800&q=80",
@@ -103,9 +104,18 @@ export default function RoomDetailPage() {
 
   const isFavorite = favorites.includes(room.id);
   const isLandlordUser = user?.role === "landlord";
-  const canUseFavorites = !user || user.role === "tenant";
+  const canUseFavorites =
+    ENABLE_FAVORITES && (!user || user.role === "tenant");
   const isAvailableListing = room.status === "available";
   const isListingOwner = user?.id === room.landlord.id;
+  const guestActionHint =
+    ENABLE_BOOKING_REQUESTS && ENABLE_FAVORITES
+      ? "Login to request or save this listing."
+      : ENABLE_FAVORITES
+        ? "Login to save this listing."
+        : ENABLE_BOOKING_REQUESTS
+          ? "Login to request this listing."
+          : "Login to continue.";
 
   const roomImages = useMemo(() => {
     if (
@@ -123,6 +133,9 @@ export default function RoomDetailPage() {
       setShowLoginPrompt(true);
       return;
     }
+    if (!ENABLE_FAVORITES) {
+      return;
+    }
     if (user.role === "landlord") {
       return;
     }
@@ -134,6 +147,9 @@ export default function RoomDetailPage() {
   };
 
   const handleBookClick = () => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return;
+    }
     if (!user) {
       setShowLoginPrompt(true);
       return;
@@ -327,9 +343,16 @@ export default function RoomDetailPage() {
                   className="w-full"
                   size="lg"
                   onClick={handleBookClick}
-                  disabled={isLandlordUser || isListingOwner || !isAvailableListing}
+                  disabled={
+                    !ENABLE_BOOKING_REQUESTS ||
+                    isLandlordUser ||
+                    isListingOwner ||
+                    !isAvailableListing
+                  }
                 >
-                  {isLandlordUser || isListingOwner
+                  {!ENABLE_BOOKING_REQUESTS
+                    ? "Booking Request Coming Soon"
+                    : isLandlordUser || isListingOwner
                     ? "Landlords Cannot Book"
                     : !isAvailableListing
                       ? "Listing Not Available"
@@ -353,13 +376,18 @@ export default function RoomDetailPage() {
               </div>
               {!user && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Login to request or save this listing.
+                  {guestActionHint}
                 </p>
               )}
               {isLandlordUser && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
                   Landlord accounts can only manage listings and incoming tenant
                   requests.
+                </p>
+              )}
+              {!ENABLE_BOOKING_REQUESTS && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  Booking request workflow is temporarily disabled for launch.
                 </p>
               )}
               {!isAvailableListing && (
@@ -505,8 +533,7 @@ export default function RoomDetailPage() {
           <DialogHeader>
             <DialogTitle>Login Required</DialogTitle>
             <DialogDescription>
-              Please login to send rental requests or add listings to your
-              favorites.
+              Please login to continue.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
