@@ -5,7 +5,15 @@ import { useParams, notFound, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { mockRooms } from "@/lib/mock-data";
+import {
+  bathroomTypeLabels,
+  getFlatConfigurationLabel,
+  normalizeRoom,
+  rentalStatusLabels,
+  rentalTypeLabels,
+  waterFacilityLabels,
+  type Room,
+} from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -42,20 +50,14 @@ import {
 import {
   Heart,
   MapPin,
-  Wifi,
-  Bath,
-  UtensilsCrossed,
-  Droplets,
-  Car,
-  Sofa,
   CheckCircle2,
   ArrowLeft,
   CalendarIcon,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { formatNPR } from "@/lib/currency";
 
-// Default room images for fallback
 const defaultRoomImages = [
   "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800&q=80",
   "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800&q=80",
@@ -83,19 +85,17 @@ export default function RoomDetailPage() {
   const [tenantMessage, setTenantMessage] = useState("");
   const [showDuplicateRequestDialog, setShowDuplicateRequestDialog] =
     useState(false);
+  const [showVerificationRequired, setShowVerificationRequired] =
+    useState(false);
 
   const allRooms = useMemo(() => {
-    return [...mockRooms, ...postedRooms];
+    return postedRooms
+      .map((room) => normalizeRoom(room))
+      .filter((room): room is Room => room !== null);
   }, [postedRooms]);
 
   const roomIdParam = Array.isArray(params.id) ? params.id[0] : params.id;
-  let room = allRooms.find((r) => r.id === roomIdParam);
-  if (!room && roomIdParam?.startsWith("hardcoded_landlord_listing_")) {
-    const legacyIndex = Number(roomIdParam.split("_").pop());
-    if (!Number.isNaN(legacyIndex) && legacyIndex > 0) {
-      room = mockRooms[legacyIndex - 1];
-    }
-  }
+  const room = allRooms.find((r) => r.id === roomIdParam);
 
   if (!room) {
     notFound();
@@ -103,8 +103,9 @@ export default function RoomDetailPage() {
 
   const isFavorite = favorites.includes(room.id);
   const isLandlordUser = user?.role === "landlord";
+  const isAvailableListing = room.status === "available";
+  const isListingOwner = user?.id === room.landlord.id;
 
-  // Get valid images with fallback
   const roomImages = useMemo(() => {
     if (
       room.images &&
@@ -128,15 +129,12 @@ export default function RoomDetailPage() {
     }
   };
 
-  const [showVerificationRequired, setShowVerificationRequired] =
-    useState(false);
-
   const handleBookClick = () => {
     if (!user) {
       setShowLoginPrompt(true);
       return;
     }
-    if (isLandlordUser || user.id === room.landlord.id) {
+    if (isLandlordUser || isListingOwner || !isAvailableListing) {
       return;
     }
     if (!user.verified) {
@@ -180,43 +178,41 @@ export default function RoomDetailPage() {
     }
   };
 
-  const facilities = [
+  const flatConfiguration = getFlatConfigurationLabel(room);
+  const listingDetails = [
+    ...(room.rental_type === "flat"
+      ? [
+          {
+            label: "Configuration",
+            value: flatConfiguration ?? "Flat",
+          },
+        ]
+      : [
+          {
+            label: "Total Rooms",
+            value: String(room.no_of_rooms),
+          },
+          {
+            label: "Kitchen Access",
+            value: room.is_kitchen ? "Available" : "Not available",
+          },
+        ]),
     {
-      key: "bathroom",
-      label: "Private Bathroom",
-      icon: Bath,
-      available: room.facilities.bathroom,
+      label: "Bathroom Access",
+      value: bathroomTypeLabels[room.bathroom_type],
     },
     {
-      key: "kitchen",
-      label: "Kitchen",
-      icon: UtensilsCrossed,
-      available: room.facilities.kitchen,
-    },
-    { key: "wifi", label: "WiFi", icon: Wifi, available: room.facilities.wifi },
-    {
-      key: "waterSupply",
       label: "Water Supply",
-      icon: Droplets,
-      available: room.facilities.waterSupply,
+      value: waterFacilityLabels[room.water_facility],
     },
     {
-      key: "parking",
-      label: "Parking",
-      icon: Car,
-      available: room.facilities.parking,
-    },
-    {
-      key: "furnished",
-      label: "Furnished",
-      icon: Sofa,
-      available: room.facilities.furnished,
+      label: "Listed On",
+      value: format(new Date(room.created_at), "PPP"),
     },
   ];
 
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Back Button */}
       <Button variant="ghost" asChild className="mb-6">
         <Link href="/explore">
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -225,9 +221,7 @@ export default function RoomDetailPage() {
       </Button>
 
       <div className="grid gap-8 lg:grid-cols-3">
-        {/* Main Content */}
         <div className="lg:col-span-2">
-          {/* Image Carousel */}
           <Carousel className="w-full">
             <CarouselContent>
               {roomImages.map((image, index) => (
@@ -247,13 +241,17 @@ export default function RoomDetailPage() {
             <CarouselNext className="right-4" />
           </Carousel>
 
-          {/* Room Info */}
           <div className="mt-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <Badge variant="secondary" className="mb-2">
-                  {room.type.charAt(0).toUpperCase() + room.type.slice(1)}
-                </Badge>
+                <div className="mb-2 flex items-center gap-2">
+                  <Badge variant="secondary">
+                    {rentalTypeLabels[room.rental_type]}
+                  </Badge>
+                  <Badge variant="outline">
+                    {rentalStatusLabels[room.status]}
+                  </Badge>
+                </div>
                 <h1 className="text-2xl font-bold md:text-3xl">{room.title}</h1>
                 <div className="mt-2 flex items-center gap-1 text-muted-foreground">
                   <MapPin className="h-4 w-4" />
@@ -261,35 +259,25 @@ export default function RoomDetailPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-3xl font-bold">${room.price}</div>
+                <div className="text-3xl font-bold">{formatNPR(room.rent)}</div>
                 <div className="text-muted-foreground">per month</div>
               </div>
             </div>
 
-            {/* Description */}
             <div className="mt-6">
-              <h2 className="text-lg font-semibold">About this place</h2>
+              <h2 className="text-lg font-semibold">About this rental</h2>
               <p className="mt-2 text-muted-foreground">{room.description}</p>
             </div>
 
-            {/* Facilities */}
-            <div className="mt-8">
-              <h2 className="text-lg font-semibold">Facilities</h2>
-              <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
-                {facilities.map((facility) => (
-                  <div
-                    key={facility.key}
-                    className={`flex items-center gap-3 rounded-lg border p-3 ${
-                      facility.available
-                        ? "bg-background"
-                        : "bg-muted/50 opacity-50"
-                    }`}
-                  >
-                    <facility.icon className="h-5 w-5" />
-                    <span className="text-sm">{facility.label}</span>
-                    {facility.available && (
-                      <CheckCircle2 className="ml-auto h-4 w-4 text-green-600" />
-                    )}
+            <div className="mt-8 rounded-2xl border bg-card p-5">
+              <h2 className="text-base font-semibold">Rental Details</h2>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                {listingDetails.map((detail) => (
+                  <div key={detail.label} className="space-y-1">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {detail.label}
+                    </p>
+                    <p className="text-sm font-medium">{detail.value}</p>
                   </div>
                 ))}
               </div>
@@ -297,10 +285,8 @@ export default function RoomDetailPage() {
           </div>
         </div>
 
-        {/* Sidebar */}
         <div className="lg:col-span-1">
           <div className="sticky top-24 space-y-6">
-            {/* Landlord Card */}
             <div className="rounded-xl border p-6">
               <h2 className="text-lg font-semibold">Listed by</h2>
               <div className="mt-4 flex items-center gap-4">
@@ -325,24 +311,25 @@ export default function RoomDetailPage() {
                     )}
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {room.landlord.email}
+                    {room.landlord.email || "Email not shared"}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="rounded-xl border p-6">
               <div className="space-y-3">
                 <Button
                   className="w-full"
                   size="lg"
                   onClick={handleBookClick}
-                  disabled={isLandlordUser || user?.id === room.landlord.id}
+                  disabled={isLandlordUser || isListingOwner || !isAvailableListing}
                 >
-                  {isLandlordUser || user?.id === room.landlord.id
+                  {isLandlordUser || isListingOwner
                     ? "Landlords Cannot Book"
-                    : "Request to Rent"}
+                    : !isAvailableListing
+                      ? "Listing Not Available"
+                      : "Request to Rent"}
                 </Button>
                 <Button
                   variant="outline"
@@ -360,13 +347,19 @@ export default function RoomDetailPage() {
               </div>
               {!user && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Login to request or save this room
+                  Login to request or save this listing.
                 </p>
               )}
               {isLandlordUser && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Landlord accounts can only manage listings and incoming
-                  tenant requests.
+                  Landlord accounts can only manage listings and incoming tenant
+                  requests.
+                </p>
+              )}
+              {!isAvailableListing && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  This listing is currently {rentalStatusLabels[room.status]} and
+                  cannot accept new requests.
                 </p>
               )}
             </div>
@@ -374,7 +367,6 @@ export default function RoomDetailPage() {
         </div>
       </div>
 
-      {/* Booking Dialog */}
       <Dialog open={showBookingDialog} onOpenChange={handleBookingClose}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -384,7 +376,7 @@ export default function RoomDetailPage() {
             <DialogDescription>
               {bookingConfirmed
                 ? "Your request is now pending landlord review."
-                : `Request "${room.title}" for long-term stay at $${room.price}/month.`}
+                : `Request "${room.title}" for long-term stay at ${formatNPR(room.rent)}/month.`}
             </DialogDescription>
           </DialogHeader>
           {bookingConfirmed ? (
@@ -412,9 +404,7 @@ export default function RoomDetailPage() {
                         )}
                       >
                         <CalendarIcon className="mr-2 h-4 w-4" />
-                        {moveInDate
-                          ? format(moveInDate, "PPP")
-                          : "Pick a date"}
+                        {moveInDate ? format(moveInDate, "PPP") : "Pick a date"}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
@@ -454,7 +444,7 @@ export default function RoomDetailPage() {
                   id="tenant-message"
                   value={tenantMessage}
                   onChange={(event) => setTenantMessage(event.target.value)}
-                  placeholder="Tell the landlord about yourself, move-in timing, or any special request."
+                  placeholder="Share your move-in timing and any relevant details."
                   rows={4}
                   maxLength={500}
                 />
@@ -466,16 +456,12 @@ export default function RoomDetailPage() {
               <div className="rounded-lg bg-muted p-4">
                 <div className="flex justify-between">
                   <span>Monthly Rent</span>
-                  <span className="font-medium">${room.price}</span>
-                </div>
-                <div className="mt-2 flex justify-between">
-                  <span>Security Deposit</span>
-                  <span className="font-medium">${room.price}</span>
+                  <span className="font-medium">{formatNPR(room.rent)}</span>
                 </div>
                 <div className="mt-3 border-t pt-3">
                   <div className="flex justify-between font-semibold">
-                    <span>Estimated Due at Move-in</span>
-                    <span>${room.price * 2}</span>
+                    <span>Estimated Initial Payment</span>
+                    <span>{formatNPR(room.rent)}</span>
                   </div>
                 </div>
               </div>
@@ -508,13 +494,12 @@ export default function RoomDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Login Prompt Dialog */}
       <Dialog open={showLoginPrompt} onOpenChange={setShowLoginPrompt}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Login Required</DialogTitle>
             <DialogDescription>
-              Please login to send rental requests or add rooms to your
+              Please login to send rental requests or add listings to your
               favorites.
             </DialogDescription>
           </DialogHeader>
@@ -522,9 +507,7 @@ export default function RoomDetailPage() {
             <Button variant="outline" onClick={() => setShowLoginPrompt(false)}>
               Cancel
             </Button>
-            <Button onClick={() => setShowLoginPrompt(false)}>
-              Go to Login
-            </Button>
+            <Button onClick={() => setShowLoginPrompt(false)}>Go to Login</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -537,9 +520,9 @@ export default function RoomDetailPage() {
           <DialogHeader>
             <DialogTitle>Request Already Exists</DialogTitle>
             <DialogDescription>
-              You already have an active request for this room. Please wait for
-              the landlord response or cancel your existing request from your
-              profile.
+              You already have an active request for this listing. Please wait
+              for the landlord response or cancel your existing request from
+              your profile.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -550,7 +533,6 @@ export default function RoomDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Verification Required Dialog */}
       <Dialog
         open={showVerificationRequired}
         onOpenChange={setShowVerificationRequired}
@@ -560,7 +542,6 @@ export default function RoomDetailPage() {
             <DialogTitle>Phone Verification Required</DialogTitle>
             <DialogDescription>
               Please verify your phone number before sending a rental request.
-              This helps us ensure secure transactions.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

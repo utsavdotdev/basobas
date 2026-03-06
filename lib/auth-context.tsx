@@ -2,11 +2,22 @@
 import {
   createContext,
   useContext,
-  useState,
   useEffect,
+  useMemo,
+  useState,
   type ReactNode,
 } from "react";
-import type { User, Room } from "./mock-data";
+import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
+import {
+  getFlatConfigurationLabel,
+  normalizeRoom,
+  rentalTypeLabels,
+  type Room,
+  type User,
+} from "./mock-data";
+import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { isUserRole, type UserRole } from "@/lib/auth/roles";
+import { normalizeNepaliPhone } from "@/lib/phone";
 
 export type BookingStatus = "pending" | "approved" | "rejected" | "cancelled";
 
@@ -32,16 +43,35 @@ type NewBookingInput = Omit<
   "id" | "createdAt" | "status" | "reviewedAt" | "reviewMessage"
 >;
 
+export type NewRoomInput = Pick<
+  Room,
+  | "rental_type"
+  | "location"
+  | "description"
+  | "images"
+  | "no_of_rooms"
+  | "configuration"
+  | "config_unit"
+  | "rent"
+  | "is_kitchen"
+  | "bathroom_type"
+  | "water_facility"
+>;
+
+type AddRoomResult =
+  | { success: true; room: Room }
+  | { success: false; error: string };
+
 interface AuthContextType {
   user: User | null;
-  login: (role: "tenant" | "landlord") => void;
+  login: (role: UserRole) => void;
   logout: () => void;
   verifyPhone: (phone: string) => void;
   favorites: string[];
   addFavorite: (roomId: string) => void;
   removeFavorite: (roomId: string) => void;
   postedRooms: Room[];
-  addRoom: (room: Room) => void;
+  addRoom: (room: NewRoomInput) => Promise<AddRoomResult>;
   bookings: Booking[];
   addBooking: (booking: NewBookingInput) => boolean;
   cancelBooking: (bookingId: string) => void;
@@ -55,6 +85,153 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const BOOKING_STORAGE_KEY = "homgwe_bookings";
+const FAVORITES_STORAGE_KEY = "homgwe_favorites";
+const POSTED_ROOMS_STORAGE_KEY = "homgwe_posted_rooms";
+const LANDLORD_SNAPSHOTS_STORAGE_KEY = "homgwe_landlord_snapshots";
+const LEGACY_USER_STORAGE_KEY = "basobas_user";
+const PENDING_ROLE_STORAGE_KEY = "basobas_pending_role";
+
+interface ProfileRow {
+  role: UserRole | null;
+  phone: string | null;
+  phone_verified: boolean | null;
+}
+
+interface RentalRow {
+  rental_id: string;
+  user_id: string;
+  rental_type: Room["rental_type"];
+  location: string;
+  description: string | null;
+  images: string[] | null;
+  no_of_rooms: number;
+  configuration: Room["configuration"];
+  config_unit: number | null;
+  rent: number | string;
+  status: Room["status"];
+  is_kitchen: boolean;
+  bathroom_type: Room["bathroom_type"];
+  water_facility: Room["water_facility"];
+  created_at: string;
+  updated_at: string;
+}
+
+type LandlordSnapshot = Pick<
+  Room["landlord"],
+  "name" | "email" | "avatar" | "verified"
+>;
+
+type LandlordSnapshotsByUserId = Record<string, LandlordSnapshot>;
+
+const sanitizeLandlordSnapshot = (
+  snapshot: Partial<Room["landlord"]> | null | undefined,
+): LandlordSnapshot | null => {
+  if (!snapshot) return null;
+
+  const name =
+    typeof snapshot.name === "string" ? snapshot.name.trim() : "";
+  const email =
+    typeof snapshot.email === "string" ? snapshot.email.trim() : "";
+  const avatar =
+    typeof snapshot.avatar === "string" ? snapshot.avatar.trim() : "";
+  const verified = snapshot.verified === true;
+
+  const hasUsefulName = Boolean(name) && name.toLowerCase() !== "landlord";
+  const hasUsefulEmail = Boolean(email);
+  const hasUsefulAvatar = Boolean(avatar);
+
+  if (!hasUsefulName && !hasUsefulEmail && !hasUsefulAvatar) {
+    return null;
+  }
+
+  return {
+    name: name || "Landlord",
+    email,
+    avatar,
+    verified,
+  };
+};
+
+const snapshotFromUser = (user: User): LandlordSnapshot => ({
+  name: user.name.trim() || "Landlord",
+  email: user.email.trim(),
+  avatar: user.avatar.trim(),
+  verified: user.verified,
+});
+
+const readLandlordSnapshotsFromStorage = (): LandlordSnapshotsByUserId => {
+  if (typeof window === "undefined") return {};
+
+  const raw = window.localStorage.getItem(LANDLORD_SNAPSHOTS_STORAGE_KEY);
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const snapshots: LandlordSnapshotsByUserId = {};
+    Object.entries(parsed).forEach(([userId, value]) => {
+      if (!userId || typeof value !== "object" || !value) return;
+      const snapshot = sanitizeLandlordSnapshot(
+        value as Partial<Room["landlord"]>,
+      );
+      if (snapshot) {
+        snapshots[userId] = snapshot;
+      }
+    });
+    return snapshots;
+  } catch {
+    return {};
+  }
+};
+
+const persistLandlordSnapshots = (snapshots: LandlordSnapshotsByUserId) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    LANDLORD_SNAPSHOTS_STORAGE_KEY,
+    JSON.stringify(snapshots),
+  );
+};
+
+const getDisplayName = (authUser: SupabaseAuthUser) => {
+  const metadata = authUser.user_metadata;
+
+  if (typeof metadata?.full_name === "string" && metadata.full_name.trim()) {
+    return metadata.full_name;
+  }
+
+  if (typeof metadata?.name === "string" && metadata.name.trim()) {
+    return metadata.name;
+  }
+
+  if (authUser.email) {
+    return authUser.email.split("@")[0] || "User";
+  }
+
+  return "User";
+};
+
+const getAvatar = (authUser: SupabaseAuthUser) => {
+  const metadata = authUser.user_metadata;
+
+  if (typeof metadata?.avatar_url === "string" && metadata.avatar_url.trim()) {
+    return metadata.avatar_url;
+  }
+
+  if (typeof metadata?.picture === "string" && metadata.picture.trim()) {
+    return metadata.picture;
+  }
+
+  return "";
+};
+
+const readPendingRoleFromStorage = (): UserRole | null => {
+  if (typeof window === "undefined") return null;
+  const role = window.localStorage.getItem(PENDING_ROLE_STORAGE_KEY);
+  return isUserRole(role) ? role : null;
+};
 
 const mapLegacyStatus = (status: unknown): BookingStatus => {
   if (status === "approved" || status === "rejected" || status === "cancelled") {
@@ -140,28 +317,118 @@ const normalizeBooking = (booking: unknown): Booking | null => {
   };
 };
 
+const toNumberSafe = (value: string | number) => {
+  if (typeof value === "number") return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isUuid = (value: string) => UUID_PATTERN.test(value);
+
+const mapRentalRowToRoom = (
+  row: RentalRow,
+  landlordSnapshot?: LandlordSnapshot | null,
+): Room | null => {
+  const roomCountText = row.no_of_rooms === 1 ? "1 room" : `${row.no_of_rooms} rooms`;
+  const configurationLabel = getFlatConfigurationLabel({
+    rental_type: row.rental_type,
+    configuration: row.configuration,
+    config_unit: row.config_unit,
+  });
+  const fallbackDescription =
+    row.rental_type === "flat"
+      ? `${configurationLabel ?? "Flat configuration"}, water: ${row.water_facility.replaceAll("_", " ")}, bathroom: ${row.bathroom_type}.`
+      : `${roomCountText}, water: ${row.water_facility.replaceAll("_", " ")}, bathroom: ${row.bathroom_type}.`;
+  return normalizeRoom({
+    id: row.rental_id,
+    rental_id: row.rental_id,
+    user_id: row.user_id,
+    title: `${rentalTypeLabels[row.rental_type]} in ${row.location}`,
+    description:
+      typeof row.description === "string" && row.description.trim()
+        ? row.description
+        : fallbackDescription,
+    location: row.location,
+    images: Array.isArray(row.images)
+      ? row.images.filter((image): image is string => typeof image === "string")
+      : [],
+    rental_type: row.rental_type,
+    no_of_rooms: row.no_of_rooms,
+    configuration: row.configuration,
+    config_unit: row.config_unit,
+    rent: toNumberSafe(row.rent),
+    status: row.status,
+    is_kitchen: row.is_kitchen,
+    bathroom_type: row.bathroom_type,
+    water_facility: row.water_facility,
+    landlord: {
+      id: row.user_id,
+      name: landlordSnapshot?.name ?? "Landlord",
+      email: landlordSnapshot?.email ?? "",
+      avatar: landlordSnapshot?.avatar ?? "",
+      verified: landlordSnapshot?.verified ?? false,
+    },
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  });
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const supabase = useMemo(() => {
+    try {
+      return createSupabaseBrowserClient();
+    } catch {
+      return null;
+    }
+  }, []);
   const [user, setUser] = useState<User | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [postedRooms, setPostedRooms] = useState<Room[]>([]);
+  const [landlordSnapshotsByUserId, setLandlordSnapshotsByUserId] =
+    useState<LandlordSnapshotsByUserId>({});
   const [bookings, setBookings] = useState<Booking[]>([]);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    // Load user from localStorage on mount
-    const savedUser = localStorage.getItem("basobas_user");
-    const savedFavorites = localStorage.getItem("homgwe_favorites");
-    const savedRooms = localStorage.getItem("homgwe_posted_rooms");
+    // Load local app data on mount
+    localStorage.removeItem(LEGACY_USER_STORAGE_KEY);
+    const savedFavorites = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    const savedRooms = localStorage.getItem(POSTED_ROOMS_STORAGE_KEY);
     const savedBookings = localStorage.getItem(BOOKING_STORAGE_KEY);
+    const savedLandlordSnapshots = readLandlordSnapshotsFromStorage();
 
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
     if (savedFavorites) {
       setFavorites(JSON.parse(savedFavorites));
     }
+    if (Object.keys(savedLandlordSnapshots).length > 0) {
+      setLandlordSnapshotsByUserId(savedLandlordSnapshots);
+      persistLandlordSnapshots(savedLandlordSnapshots);
+    }
     if (savedRooms) {
-      setPostedRooms(JSON.parse(savedRooms));
+      try {
+        const parsedRooms = JSON.parse(savedRooms);
+        if (Array.isArray(parsedRooms)) {
+          const normalizedRooms = parsedRooms
+            .map((room) => normalizeRoom(room))
+            .filter(
+              (room): room is Room =>
+                room !== null &&
+                isUuid(room.rental_id) &&
+                isUuid(room.id) &&
+                isUuid(room.user_id),
+            );
+          setPostedRooms(normalizedRooms);
+          localStorage.setItem(
+            POSTED_ROOMS_STORAGE_KEY,
+            JSON.stringify(normalizedRooms),
+          );
+        }
+      } catch {
+        localStorage.removeItem(POSTED_ROOMS_STORAGE_KEY);
+      }
     }
     if (savedBookings) {
       try {
@@ -180,32 +447,270 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const login = (role: "tenant" | "landlord") => {
-    const newUser: User = {
-      id: role === "tenant" ? "tenant_demo" : "l1",
-      name: role === "tenant" ? "Utsav Bhattarai" : "Roshan Acharaya",
-      email: role === "tenant" ? "utsavdotdev@gmail.com" : "roshan@gmail.com",
-      avatar:
-        role === "tenant"
-          ? "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80"
-          : "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&q=80",
-      role,
-      verified: false,
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchRentals = async () => {
+      const { data, error } = await supabase
+        .from("rentals")
+        .select(
+          "rental_id, user_id, rental_type, location, description, images, no_of_rooms, configuration, config_unit, rent, status, is_kitchen, bathroom_type, water_facility, created_at, updated_at",
+        )
+        .order("created_at", { ascending: false });
+
+      if (error || !data || !isMounted) {
+        return;
+      }
+
+      const rentalRows = data as RentalRow[];
+      setPostedRooms((prev) => {
+        const previousRoomMap = new Map(
+          prev.map((room) => [room.rental_id, room] as const),
+        );
+
+        const mappedRooms = rentalRows
+          .map((row) => {
+            const previousRoom = previousRoomMap.get(row.rental_id);
+            const currentUserSnapshot =
+              user && user.id === row.user_id ? snapshotFromUser(user) : null;
+            const cachedSnapshot = landlordSnapshotsByUserId[row.user_id] ?? null;
+            const previousSnapshot = sanitizeLandlordSnapshot(
+              previousRoom?.landlord,
+            );
+
+            return mapRentalRowToRoom(
+              row,
+              currentUserSnapshot ?? cachedSnapshot ?? previousSnapshot,
+            );
+          })
+          .filter((room): room is Room => room !== null);
+
+        localStorage.setItem(
+          POSTED_ROOMS_STORAGE_KEY,
+          JSON.stringify(mappedRooms),
+        );
+        return mappedRooms;
+      });
     };
-    setUser(newUser);
-    localStorage.setItem("basobas_user", JSON.stringify(newUser));
+
+    void fetchRentals();
+
+    const rentalsChannel = supabase
+      .channel("rentals_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rentals" },
+        () => {
+          void fetchRentals();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(rentalsChannel);
+    };
+  }, [landlordSnapshotsByUserId, supabase, user]);
+
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const upsertProfile = async (authUser: SupabaseAuthUser, role: UserRole) => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .upsert({ id: authUser.id, role }, { onConflict: "id" })
+        .select("role, phone, phone_verified")
+        .maybeSingle();
+
+      if (error) {
+        return null;
+      }
+
+      return data as ProfileRow | null;
+    };
+
+    const fetchProfile = async (authUser: SupabaseAuthUser) => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("role, phone, phone_verified")
+        .eq("id", authUser.id)
+        .maybeSingle();
+
+      if (error) {
+        return null;
+      }
+
+      return data as ProfileRow | null;
+    };
+
+    const syncAppUser = async (authUser: SupabaseAuthUser | null) => {
+      if (!isMounted) return;
+
+      if (!authUser) {
+        setUser(null);
+        return;
+      }
+
+      const pendingRole = readPendingRoleFromStorage();
+      let profile = await fetchProfile(authUser);
+
+      const profileRole = isUserRole(profile?.role) ? profile.role : null;
+      let resolvedRole: UserRole = profileRole ?? pendingRole ?? "tenant";
+
+      if (!profile || !profileRole) {
+        const upserted = await upsertProfile(authUser, resolvedRole);
+        if (upserted) {
+          profile = upserted;
+          resolvedRole = isUserRole(upserted.role) ? upserted.role : resolvedRole;
+        }
+      }
+
+      if (pendingRole) {
+        localStorage.removeItem(PENDING_ROLE_STORAGE_KEY);
+      }
+
+      const nextUser: User = {
+        id: authUser.id,
+        name: getDisplayName(authUser),
+        email: authUser.email ?? "",
+        avatar: getAvatar(authUser),
+        role: resolvedRole,
+        verified: Boolean(profile?.phone_verified),
+        phone: profile?.phone ?? undefined,
+      };
+
+      if (isMounted) {
+        setUser(nextUser);
+        setLandlordSnapshotsByUserId((prev) => {
+          const nextSnapshot = snapshotFromUser(nextUser);
+          const currentSnapshot = prev[nextUser.id];
+          if (
+            currentSnapshot &&
+            currentSnapshot.name === nextSnapshot.name &&
+            currentSnapshot.email === nextSnapshot.email &&
+            currentSnapshot.avatar === nextSnapshot.avatar &&
+            currentSnapshot.verified === nextSnapshot.verified
+          ) {
+            return prev;
+          }
+
+          const nextSnapshots = {
+            ...prev,
+            [nextUser.id]: nextSnapshot,
+          };
+          persistLandlordSnapshots(nextSnapshots);
+          return nextSnapshots;
+        });
+      }
+    };
+
+    void (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      await syncAppUser(session?.user ?? null);
+    })();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      void syncAppUser(session?.user ?? null);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  const login = (role: UserRole) => {
+    if (!supabase || typeof window === "undefined") {
+      return;
+    }
+
+    localStorage.setItem(PENDING_ROLE_STORAGE_KEY, role);
+    const next = `${window.location.pathname}${window.location.search}`;
+    const redirectTo = new URL("/auth/callback", window.location.origin);
+    redirectTo.searchParams.set("next", next);
+    redirectTo.searchParams.set("role", role);
+
+    void supabase.auth
+      .signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: redirectTo.toString(),
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      })
+      .then(({ error }) => {
+        if (error) {
+          localStorage.removeItem(PENDING_ROLE_STORAGE_KEY);
+        }
+      });
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem("basobas_user");
+    localStorage.removeItem(PENDING_ROLE_STORAGE_KEY);
+    if (supabase) {
+      void supabase.auth.signOut();
+    }
   };
 
   const verifyPhone = (phone: string) => {
     if (user) {
-      const updatedUser = { ...user, verified: true, phone };
+      const normalizedPhone = normalizeNepaliPhone(phone);
+      if (!normalizedPhone) {
+        return;
+      }
+
+      const verifiedAt = new Date().toISOString();
+      const updatedUser = { ...user, verified: true, phone: normalizedPhone };
       setUser(updatedUser);
-      localStorage.setItem("basobas_user", JSON.stringify(updatedUser));
+      setLandlordSnapshotsByUserId((prev) => {
+        const nextSnapshot = snapshotFromUser(updatedUser);
+        const currentSnapshot = prev[updatedUser.id];
+        if (
+          currentSnapshot &&
+          currentSnapshot.name === nextSnapshot.name &&
+          currentSnapshot.email === nextSnapshot.email &&
+          currentSnapshot.avatar === nextSnapshot.avatar &&
+          currentSnapshot.verified === nextSnapshot.verified
+        ) {
+          return prev;
+        }
+
+        const nextSnapshots = {
+          ...prev,
+          [updatedUser.id]: nextSnapshot,
+        };
+        persistLandlordSnapshots(nextSnapshots);
+        return nextSnapshots;
+      });
+
+      if (supabase) {
+        void supabase.from("profiles").upsert(
+          {
+            id: user.id,
+            role: user.role,
+            phone: normalizedPhone,
+            phone_verified: true,
+            phone_verified_at: verifiedAt,
+          },
+          { onConflict: "id" },
+        );
+      }
     }
   };
 
@@ -213,19 +718,89 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (favorites.includes(roomId)) return;
     const newFavorites = [...favorites, roomId];
     setFavorites(newFavorites);
-    localStorage.setItem("homgwe_favorites", JSON.stringify(newFavorites));
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(newFavorites));
   };
 
   const removeFavorite = (roomId: string) => {
     const newFavorites = favorites.filter((id) => id !== roomId);
     setFavorites(newFavorites);
-    localStorage.setItem("homgwe_favorites", JSON.stringify(newFavorites));
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(newFavorites));
   };
 
-  const addRoom = (room: Room) => {
-    const newRooms = [...postedRooms, room];
-    setPostedRooms(newRooms);
-    localStorage.setItem("homgwe_posted_rooms", JSON.stringify(newRooms));
+  const addRoom = async (room: NewRoomInput): Promise<AddRoomResult> => {
+    if (!supabase) {
+      return { success: false, error: "Supabase client is unavailable." };
+    }
+
+    if (!user || user.role !== "landlord") {
+      return { success: false, error: "Only landlords can post rentals." };
+    }
+
+    const normalizedRoomCount =
+      room.rental_type === "flat"
+        ? Math.max(1, room.config_unit ?? room.no_of_rooms)
+        : room.rental_type === "single_room"
+          ? 1
+          : Math.max(1, room.no_of_rooms);
+    const normalizedConfiguration =
+      room.rental_type === "flat" ? (room.configuration ?? "bhk") : null;
+    const normalizedConfigUnit =
+      room.rental_type === "flat"
+        ? Math.max(1, room.config_unit ?? normalizedRoomCount)
+        : null;
+
+    const insertPayload = {
+      user_id: user.id,
+      rental_type: room.rental_type,
+      location: room.location,
+      description: room.description,
+      images: room.images,
+      no_of_rooms: normalizedRoomCount,
+      configuration: normalizedConfiguration,
+      config_unit: normalizedConfigUnit,
+      rent: room.rent,
+      status: "available" as const,
+      is_kitchen: room.rental_type === "flat" ? true : room.is_kitchen,
+      bathroom_type: room.bathroom_type,
+      water_facility: room.water_facility,
+    };
+
+    const { data, error } = await supabase
+      .from("rentals")
+      .insert(insertPayload)
+      .select(
+        "rental_id, user_id, rental_type, location, description, images, no_of_rooms, configuration, config_unit, rent, status, is_kitchen, bathroom_type, water_facility, created_at, updated_at",
+      )
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: error?.message || "Failed to save rental listing.",
+      };
+    }
+
+    const normalizedRoom = mapRentalRowToRoom(
+      data as RentalRow,
+      snapshotFromUser(user),
+    );
+    if (!normalizedRoom) {
+      return {
+        success: false,
+        error: "Rental was saved but could not be mapped for display.",
+      };
+    }
+
+    setPostedRooms((prev) => {
+      const newRooms = [
+        normalizedRoom,
+        ...prev.filter((item) => item.rental_id !== normalizedRoom.rental_id),
+      ];
+      localStorage.setItem(POSTED_ROOMS_STORAGE_KEY, JSON.stringify(newRooms));
+      return newRooms;
+    });
+
+    return { success: true, room: normalizedRoom };
   };
 
   const addBooking = (booking: NewBookingInput) => {

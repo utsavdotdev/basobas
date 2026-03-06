@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,10 +86,9 @@ export function HeroSection() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="single">Single Room</SelectItem>
-                  <SelectItem value="double">Double Room</SelectItem>
-                  <SelectItem value="studio">Studio</SelectItem>
-                  <SelectItem value="apartment">Apartment</SelectItem>
+                  <SelectItem value="single_room">Single Room</SelectItem>
+                  <SelectItem value="multiple_room">Multiple Room</SelectItem>
+                  <SelectItem value="flat">Flat</SelectItem>
                 </SelectContent>
               </Select>
             </div>

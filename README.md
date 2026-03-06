@@ -21,8 +21,10 @@ BasoBas now uses **Supabase-only backend infrastructure**.
 1. Create `.env.local`:
 
 ```env
-SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
+# Optional backward-compatible alias if you already use this:
+# NEXT_PUBLIC_SUPABASE_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
 ```
 
 2. Install dependencies:
@@ -37,4 +39,26 @@ pnpm install
 pnpm dev
 ```
 
-Homepage shows a Supabase connection status banner (`Connected` or `Not connected`).
+## Google Authentication Setup
+
+1. Apply Supabase migration for auth profile/role tables only:
+
+```bash
+supabase db push
+```
+
+2. In Supabase dashboard:
+- Go to `Authentication -> Providers -> Google` and enable Google.
+- Set your Google OAuth `Client ID` and `Client Secret`.
+
+3. In Google Cloud OAuth settings:
+- Add authorized redirect URI:
+  - `https://<YOUR_PROJECT_REF>.supabase.co/auth/v1/callback`
+
+4. In Supabase dashboard `Authentication -> URL Configuration`:
+- Set `Site URL` to your app URL (local: `http://localhost:3000`).
+- Add redirect URLs:
+  - `http://localhost:3000/auth/callback`
+  - `https://your-production-domain.com/auth/callback`
+
+After this, users can choose `tenant` or `landlord` in the login modal and continue with Google OAuth.

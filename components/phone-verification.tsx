@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { AlertCircle, CheckCircle2, Phone } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -27,10 +27,11 @@ import {
   InputOTPSlot,
 } from "@/components/ui/input-otp";
 import { Stepper, type StepperStep } from "@/components/stepper";
+import { getNepaliLocalPhone, normalizeNepaliPhone } from "@/lib/phone";
 
 interface PhoneVerificationProps {
   isVerified: boolean;
-  onVerify: (phone: string) => void;
+  onVerify: (phone: string) => Promise<void> | void;
 }
 
 export function PhoneVerification({
@@ -44,6 +45,8 @@ export function PhoneVerification({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [verificationError, setVerificationError] = useState("");
   const [resendCount, setResendCount] = useState(0);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
 
   const steps: StepperStep[] = [
     {
@@ -61,22 +64,81 @@ export function PhoneVerification({
   const currentStepIndex =
     step === "idle" ? 0 : step === "phone" ? 0 : step === "otp" ? 1 : 0;
 
+  const normalizedPhone = useMemo(
+    () => normalizeNepaliPhone(phoneNumber),
+    [phoneNumber],
+  );
+
+  const localPhoneForDisplay = useMemo(() => {
+    if (normalizedPhone) {
+      return getNepaliLocalPhone(normalizedPhone);
+    }
+    return phoneNumber;
+  }, [normalizedPhone, phoneNumber]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+
+    const interval = window.setInterval(() => {
+      setResendCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [resendCooldown]);
+
   const handleSendOTP = async () => {
-    if (phoneNumber.length < 10) {
-      setVerificationError("Please enter a valid 10-digit phone number");
+    if (!normalizedPhone) {
+      setVerificationError(
+        "Please enter a valid Nepali mobile number (10 digits starting with 9).",
+      );
       return;
     }
 
     setIsLoading(true);
     setVerificationError("");
+    setDevOtpPreview(null);
 
-    setTimeout(() => {
+    try {
+      const response = await fetch("/api/phone-verification/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: normalizedPhone }),
+      });
+      const data = (await response.json()) as {
+        success?: boolean;
+        error?: string;
+        retryAfterSeconds?: number;
+        devOtpPreview?: string;
+      };
+
+      if (!response.ok || !data.success) {
+        setVerificationError(data.error || "Failed to send OTP.");
+        if (typeof data.retryAfterSeconds === "number") {
+          setResendCooldown(Math.max(0, data.retryAfterSeconds));
+        }
+        return;
+      }
+
       setStep("otp");
+      setResendCooldown(Math.max(0, data.retryAfterSeconds ?? 60));
+      if (data.devOtpPreview) {
+        setDevOtpPreview(data.devOtpPreview);
+      }
+    } catch {
+      setVerificationError("Unable to send OTP right now. Please try again.");
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handleVerifyOTP = async () => {
+    if (!normalizedPhone) {
+      setVerificationError(
+        "Please enter a valid Nepali mobile number (10 digits starting with 9).",
+      );
+      return;
+    }
+
     if (otp.length !== 6) {
       setVerificationError("Please enter a valid 6-digit OTP");
       return;
@@ -84,16 +146,39 @@ export function PhoneVerification({
 
     setIsLoading(true);
     setVerificationError("");
+    setDevOtpPreview(null);
 
-    setTimeout(() => {
-      onVerify(phoneNumber);
+    try {
+      const response = await fetch("/api/phone-verification/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: normalizedPhone, otp }),
+      });
+
+      const data = (await response.json()) as {
+        success?: boolean;
+        error?: string;
+        phone?: string;
+      };
+
+      if (!response.ok || !data.success) {
+        setVerificationError(data.error || "OTP verification failed.");
+        return;
+      }
+
+      await onVerify(data.phone ?? normalizedPhone);
       setPhoneNumber("");
       setOtp("");
       setStep("idle");
       setDialogOpen(false);
-      setIsLoading(false);
       setResendCount(0);
-    }, 1000);
+      setResendCooldown(0);
+      setDevOtpPreview(null);
+    } catch {
+      setVerificationError("Unable to verify OTP right now. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClose = () => {
@@ -103,6 +188,8 @@ export function PhoneVerification({
     setOtp("");
     setVerificationError("");
     setResendCount(0);
+    setResendCooldown(0);
+    setDevOtpPreview(null);
   };
 
   if (isVerified) {
@@ -164,7 +251,7 @@ export function PhoneVerification({
               <DialogHeader>
                 <DialogTitle>Verify Your Phone Number</DialogTitle>
                 <DialogDescription>
-                  We'll send you a verification code via SMS
+                  We&apos;ll send you a verification code via SMS
                 </DialogDescription>
               </DialogHeader>
 
@@ -207,6 +294,7 @@ export function PhoneVerification({
                             e.target.value.replace(/\D/g, "").toString(),
                           );
                           setVerificationError("");
+                          setDevOtpPreview(null);
                         }}
                         maxLength={10}
                         className="flex-1"
@@ -224,7 +312,7 @@ export function PhoneVerification({
 
                   <Button
                     onClick={handleSendOTP}
-                    disabled={isLoading || phoneNumber.length < 10}
+                    disabled={isLoading || !normalizedPhone}
                     className="w-full"
                   >
                     {isLoading ? "Sending OTP..." : "Send OTP"}
@@ -247,9 +335,14 @@ export function PhoneVerification({
                     <p className="text-sm text-muted-foreground">
                       OTP sent to{" "}
                       <span className="font-semibold text-foreground">
-                        +1 {phoneNumber}
+                        +977 {localPhoneForDisplay}
                       </span>
                     </p>
+                    {devOtpPreview && (
+                      <p className="mt-2 text-xs text-amber-700">
+                        Prototype OTP: <span className="font-semibold">{devOtpPreview}</span>
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-3">
@@ -332,11 +425,13 @@ export function PhoneVerification({
                           handleSendOTP();
                           setResendCount((prev) => prev + 1);
                         }}
-                        disabled={isLoading}
+                        disabled={isLoading || resendCooldown > 0}
                         className="w-full text-xs text-muted-foreground hover:text-foreground"
                       >
-                        Didn't receive the code? Resend
-                        {resendCount > 0 && ` (${resendCount}/3)`}
+                        {resendCooldown > 0
+                          ? `Resend in ${resendCooldown}s`
+                          : "Didn&apos;t receive the code? Resend"}
+                        {resendCount > 0 && resendCooldown <= 0 && ` (${resendCount}/3)`}
                       </Button>
                     )}
                   </div>

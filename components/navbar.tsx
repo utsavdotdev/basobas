@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Menu, X, User, LogOut, Heart, Home, Plus, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,10 +30,42 @@ export function Navbar() {
   const [selectedRole, setSelectedRole] = useState<
     "tenant" | "landlord" | null
   >(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const pathname = usePathname();
+  const router = useRouter();
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(window.location.search);
+    const authErrorCode = nextParams.get("auth_error");
+
+    if (!authErrorCode) {
+      return;
+    }
+
+    if (authErrorCode === "role_conflict") {
+      setAuthError(
+        "You cannot login using same email address for different user.",
+      );
+    } else {
+      setAuthError("Authentication failed. Please try again.");
+    }
+
+    setLoginDialogOpen(true);
+
+    nextParams.delete("auth_error");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  }, [pathname, router]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleLogin = () => {
     if (selectedRole) {
+      setAuthError(null);
       login(selectedRole);
       setLoginDialogOpen(false);
       setSelectedRole(null);
@@ -44,6 +76,7 @@ export function Navbar() {
     setLoginDialogOpen(open);
     if (!open) {
       setSelectedRole(null);
+      setAuthError(null);
     }
   };
 
@@ -93,6 +126,11 @@ export function Navbar() {
                       className="rounded-full"
                     >
                       <Avatar className="h-8 w-8">
+                        <AvatarImage
+                          src={user.avatar || undefined}
+                          alt={user.name}
+                          className="object-cover"
+                        />
                         <AvatarFallback className="bg-primary text-primary-foreground text-sm">
                           {user.name.charAt(0).toUpperCase()}
                         </AvatarFallback>
@@ -161,11 +199,20 @@ export function Navbar() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setLoginDialogOpen(true)}
+                    onClick={() => {
+                      setAuthError(null);
+                      setLoginDialogOpen(true);
+                    }}
                   >
                     Sign Up
                   </Button>
-                  <Button size="sm" onClick={() => setLoginDialogOpen(true)}>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setAuthError(null);
+                      setLoginDialogOpen(true);
+                    }}
+                  >
                     Login
                   </Button>
                 </>
@@ -229,6 +276,7 @@ export function Navbar() {
                     className="w-full"
                     size="sm"
                     onClick={() => {
+                      setAuthError(null);
                       setLoginDialogOpen(true);
                       setMobileMenuOpen(false);
                     }}
@@ -254,7 +302,10 @@ export function Navbar() {
             {/* Role Selection */}
             <div className="grid gap-3 sm:grid-cols-2">
               <button
-                onClick={() => setSelectedRole("tenant")}
+                onClick={() => {
+                  setSelectedRole("tenant");
+                  setAuthError(null);
+                }}
                 className={cn(
                   "relative flex flex-col items-center gap-2 rounded-lg border-2 p-4 text-center transition-all hover:border-primary/50",
                   selectedRole === "tenant"
@@ -274,7 +325,10 @@ export function Navbar() {
                 </span>
               </button>
               <button
-                onClick={() => setSelectedRole("landlord")}
+                onClick={() => {
+                  setSelectedRole("landlord");
+                  setAuthError(null);
+                }}
                 className={cn(
                   "relative flex flex-col items-center gap-2 rounded-lg border-2 p-4 text-center transition-all hover:border-primary/50",
                   selectedRole === "landlord"
@@ -335,11 +389,15 @@ export function Navbar() {
               Sign in with Google
             </Button>
 
-            {!selectedRole && (
+            {authError ? (
+              <p className="text-center text-xs text-destructive">
+                {authError}
+              </p>
+            ) : !selectedRole ? (
               <p className="text-center text-xs text-muted-foreground">
                 Please select a role above to continue
               </p>
-            )}
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

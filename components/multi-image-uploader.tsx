@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import Image from "next/image";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,8 +36,6 @@ export function MultiImageUploader({
   onImagesChange,
   maxImages = 5,
 }: MultiImageUploaderProps) {
-  const [hoveredImage, setHoveredImage] = useState<string | null>(null);
-
   const handleImageSelect = (imageUrl: string) => {
     if (selectedImages.includes(imageUrl)) {
       onImagesChange(selectedImages.filter((img) => img !== imageUrl));
@@ -48,13 +46,6 @@ export function MultiImageUploader({
 
   const handleRemoveImage = (imageUrl: string) => {
     onImagesChange(selectedImages.filter((img) => img !== imageUrl));
-  };
-
-  const handleReorderImage = (fromIndex: number, toIndex: number) => {
-    const newImages = [...selectedImages];
-    const [removed] = newImages.splice(fromIndex, 1);
-    newImages.splice(toIndex, 0, removed);
-    onImagesChange(newImages);
   };
 
   return (
@@ -88,8 +79,6 @@ export function MultiImageUploader({
                 <div
                   key={image}
                   className="group relative aspect-square overflow-hidden rounded-lg border-2 border-primary bg-muted"
-                  onMouseEnter={() => setHoveredImage(image)}
-                  onMouseLeave={() => setHoveredImage(null)}
                 >
                   <Image
                     src={image || "/placeholder.svg"}
@@ -142,7 +131,6 @@ export function MultiImageUploader({
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
             {SAMPLE_IMAGES.map((image) => {
-              console.log("Rendering image:", image);
               const isSelected = selectedImages.includes(image);
               return (
                 <button

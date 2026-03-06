@@ -4,11 +4,26 @@ import React from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import type { Room } from "@/lib/mock-data";
+import {
+  bathroomTypeLabels,
+  getFlatConfigurationLabel,
+  rentalStatusLabels,
+  rentalTypeLabels,
+  waterFacilityLabels,
+  type Room,
+} from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Heart, MapPin, Wifi, Bath, Car } from "lucide-react";
+import {
+  Heart,
+  MapPin,
+  UtensilsCrossed,
+  Bath,
+  Droplets,
+  Home,
+} from "lucide-react";
+import { formatNPR } from "@/lib/currency";
 
 const defaultRoomImages = [
   "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800&q=80",
@@ -44,21 +59,34 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
     }
     const numericId = parseInt(room.id.replace(/\D/g, "") || "0", 10);
     const index = numericId % defaultRoomImages.length;
-    console.log(index);
     return defaultRoomImages[index];
   };
 
-  // Quick amenities display (max 3)
-  const amenities = [];
-  if (room.facilities.wifi) amenities.push({ icon: Wifi, label: "WiFi" });
-  if (room.facilities.bathroom) amenities.push({ icon: Bath, label: "Bath" });
-  if (room.facilities.parking) amenities.push({ icon: Car, label: "Parking" });
+  const flatConfiguration = getFlatConfigurationLabel(room);
+  const amenities =
+    room.rental_type === "flat"
+      ? [
+          { icon: Home, label: flatConfiguration ?? "Flat" },
+          { icon: Bath, label: bathroomTypeLabels[room.bathroom_type] },
+          { icon: Droplets, label: waterFacilityLabels[room.water_facility] },
+        ]
+      : [
+          {
+            icon: Home,
+            label: `${room.no_of_rooms} Room${room.no_of_rooms > 1 ? "s" : ""}`,
+          },
+          { icon: Bath, label: bathroomTypeLabels[room.bathroom_type] },
+          { icon: Droplets, label: waterFacilityLabels[room.water_facility] },
+          ...(room.is_kitchen
+            ? [{ icon: UtensilsCrossed, label: "Kitchen Access" }]
+            : []),
+        ];
 
   if (viewMode === "list") {
     return (
       <Card className="group overflow-hidden">
         <div className="flex flex-col sm:flex-row">
-          <div className="relative aspect-[4/3] w-full sm:aspect-auto sm:h-36 sm:w-48 flex-shrink-0">
+          <div className="relative aspect-[4/3] w-full flex-shrink-0 sm:h-36 sm:w-48 sm:aspect-auto">
             <Link href={`/room/${room.id}`}>
               <Image
                 src={getImageUrl()}
@@ -89,23 +117,28 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
             <div>
               <div className="flex items-start justify-between gap-2">
                 <Link href={`/room/${room.id}`}>
-                  <h3 className="font-medium text-sm line-clamp-1 hover:text-primary transition-colors">
+                  <h3 className="line-clamp-1 text-sm font-medium transition-colors hover:text-primary">
                     {room.title}
                   </h3>
                 </Link>
-                <Badge variant="secondary" className="text-xs shrink-0">
-                  {room.type}
-                </Badge>
+                <div className="flex items-center gap-1">
+                  <Badge variant="secondary" className="shrink-0 text-xs">
+                    {rentalTypeLabels[room.rental_type]}
+                  </Badge>
+                  <Badge variant="outline" className="shrink-0 text-xs">
+                    {rentalStatusLabels[room.status]}
+                  </Badge>
+                </div>
               </div>
               <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                 <MapPin className="h-3 w-3" />
                 <span className="line-clamp-1">{room.location}</span>
               </div>
               {amenities.length > 0 && (
-                <div className="mt-2 flex gap-2">
-                  {amenities.slice(0, 3).map((item, idx) => (
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                  {amenities.slice(0, 4).map((item, idx) => (
                     <div
-                      key={idx}
+                      key={`${item.label}-${idx}`}
                       className="flex items-center gap-1 text-xs text-muted-foreground"
                     >
                       <item.icon className="h-3 w-3" />
@@ -117,14 +150,14 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
             </div>
             <div className="mt-2 flex items-center justify-between">
               <div>
-                <span className="font-semibold">${room.price}</span>
-                <span className="text-xs text-muted-foreground">/mo</span>
+                <span className="font-semibold">{formatNPR(room.rent)}</span>
+                <span className="text-xs text-muted-foreground">/month</span>
               </div>
               <Button
                 asChild
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs bg-transparent"
+                className="h-7 bg-transparent text-xs"
               >
                 <Link href={`/room/${room.id}`}>View</Link>
               </Button>
@@ -163,13 +196,18 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
             />
           </button>
         )}
-        <Badge className="absolute bottom-2 left-2 bg-background/90 text-foreground text-xs">
-          {room.type}
-        </Badge>
+        <div className="absolute bottom-2 left-2 flex items-center gap-1">
+          <Badge className="bg-background/90 text-xs text-foreground">
+            {rentalTypeLabels[room.rental_type]}
+          </Badge>
+          <Badge variant="outline" className="bg-background/90 text-xs">
+            {rentalStatusLabels[room.status]}
+          </Badge>
+        </div>
       </div>
       <div className="p-3">
         <Link href={`/room/${room.id}`}>
-          <h3 className="font-medium text-sm line-clamp-1 hover:text-primary transition-colors">
+          <h3 className="line-clamp-1 text-sm font-medium transition-colors hover:text-primary">
             {room.title}
           </h3>
         </Link>
@@ -177,22 +215,21 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
           <MapPin className="h-3 w-3" />
           <span className="line-clamp-1">{room.location}</span>
         </div>
-        {amenities.length > 0 && (
-          <div className="mt-2 flex gap-2">
-            {amenities.slice(0, 3).map((item, idx) => (
-              <div
-                key={idx}
-                className="flex items-center gap-1 text-xs text-muted-foreground"
-              >
-                <item.icon className="h-3 w-3" />
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          {amenities.slice(0, 3).map((item, idx) => (
+            <div
+              key={`${item.label}-${idx}`}
+              className="flex items-center gap-1 text-xs text-muted-foreground"
+            >
+              <item.icon className="h-3 w-3" />
+              <span>{item.label}</span>
+            </div>
+          ))}
+        </div>
         <div className="mt-3 flex items-center justify-between border-t pt-3">
           <div>
-            <span className="font-semibold">${room.price}</span>
-            <span className="text-xs text-muted-foreground">/mo</span>
+            <span className="font-semibold">{formatNPR(room.rent)}</span>
+            <span className="text-xs text-muted-foreground">/month</span>
           </div>
           <Button asChild size="sm" className="h-7 text-xs">
             <Link href={`/room/${room.id}`}>View</Link>

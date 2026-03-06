@@ -9,13 +9,9 @@ import { Plus } from "lucide-react";
 
 interface LandlordListingsTabProps {
   landlordListings: Room[];
-  showingDemoListings: boolean;
 }
 
-export function LandlordListingsTab({
-  landlordListings,
-  showingDemoListings,
-}: LandlordListingsTabProps) {
+export function LandlordListingsTab({ landlordListings }: LandlordListingsTabProps) {
   return (
     <TabsContent value="listings">
       <div className="space-y-6">
@@ -38,11 +34,6 @@ export function LandlordListingsTab({
           <h3 className="mb-4 text-lg font-semibold">
             My Listings ({landlordListings.length})
           </h3>
-          {showingDemoListings && (
-            <p className="mb-4 text-sm text-muted-foreground">
-              Showing demo listings. Post your room to replace these samples.
-            </p>
-          )}
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {landlordListings.map((room) => (
               <RoomCard key={room.id} room={room} />

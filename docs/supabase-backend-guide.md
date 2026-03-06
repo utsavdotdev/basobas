@@ -24,7 +24,9 @@ Installed packages:
 
 Existing project files:
 - `lib/supabase/server.ts`
-- `lib/supabase/check-connection.ts`
+- `lib/supabase/client.ts`
+- `lib/supabase/middleware.ts`
+- `app/auth/callback/route.ts`
 
 Connection status UI exists on:
 - `app/page.tsx`
@@ -35,10 +37,6 @@ Use `.env.local` for local development.
 
 ```env
 # Required
-SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
-
-# Recommended for standard Supabase naming compatibility
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
 
@@ -73,10 +71,14 @@ Use `createServerClient` from `@supabase/ssr` inside server contexts so cookies/
 
 Current project implementation:
 - `lib/supabase/server.ts`
+- `proxy.ts` + `lib/supabase/middleware.ts` (session cookie refresh)
 
 ### 5.2 Browser client (when needed)
 
 If client components need direct Supabase calls, add a browser client helper using `createBrowserClient` from `@supabase/ssr`.
+
+Current project implementation:
+- `lib/supabase/client.ts`
 
 ### 5.3 Admin client (service-role)
 
@@ -101,6 +103,11 @@ Minimum auth checks per write:
 1. authenticated user exists
 2. role is valid for action
 3. ownership relationship is valid (listing owner, request owner)
+
+Current role persistence implementation:
+- `public.profiles` table with `role in ('tenant', 'landlord')`
+- OAuth callback route (`/auth/callback`) exchanges session code and upserts selected role
+- RLS policies limit profile read/write to the authenticated user
 
 ## 7. Database and Migrations
 
