@@ -42,10 +42,14 @@ interface RoomCardProps {
 export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
   const { user, favorites, addFavorite, removeFavorite } = useAuth();
   const isFavorite = favorites.includes(room.id);
+  const canUseFavorites = user?.role === "tenant";
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (user?.role === "landlord") {
+      return;
+    }
     if (isFavorite) {
       removeFavorite(room.id);
     } else {
@@ -95,7 +99,7 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
                 className="object-cover transition-transform duration-300 group-hover:scale-105"
               />
             </Link>
-            {user && (
+            {canUseFavorites && (
               <button
                 onClick={handleFavoriteClick}
                 className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-background/90 shadow-sm transition-colors hover:bg-background"
@@ -179,7 +183,7 @@ export function RoomCard({ room, viewMode = "grid" }: RoomCardProps) {
             className="object-cover transition-transform duration-300 group-hover:scale-105"
           />
         </Link>
-        {user && (
+        {canUseFavorites && (
           <button
             onClick={handleFavoriteClick}
             className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-background/90 shadow-sm transition-colors hover:bg-background"

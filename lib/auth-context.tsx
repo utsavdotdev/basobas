@@ -116,6 +116,10 @@ interface RentalRow {
   updated_at: string;
 }
 
+interface FavoriteRow {
+  rental_id: string;
+}
+
 type LandlordSnapshot = Pick<
   Room["landlord"],
   "name" | "email" | "avatar" | "verified"
@@ -193,6 +197,11 @@ const persistLandlordSnapshots = (snapshots: LandlordSnapshotsByUserId) => {
     LANDLORD_SNAPSHOTS_STORAGE_KEY,
     JSON.stringify(snapshots),
   );
+};
+
+const persistFavorites = (favoriteIds: string[]) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteIds));
 };
 
 const getDisplayName = (authUser: SupabaseAuthUser) => {
@@ -401,7 +410,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const savedLandlordSnapshots = readLandlordSnapshotsFromStorage();
 
     if (savedFavorites) {
-      setFavorites(JSON.parse(savedFavorites));
+      try {
+        const parsedFavorites = JSON.parse(savedFavorites);
+        if (Array.isArray(parsedFavorites)) {
+          const normalizedFavorites = parsedFavorites.filter(
+            (favoriteId): favoriteId is string =>
+              typeof favoriteId === "string" && isUuid(favoriteId),
+          );
+          setFavorites(normalizedFavorites);
+          persistFavorites(normalizedFavorites);
+        }
+      } catch {
+        localStorage.removeItem(FAVORITES_STORAGE_KEY);
+      }
     }
     if (Object.keys(savedLandlordSnapshots).length > 0) {
       setLandlordSnapshotsByUserId(savedLandlordSnapshots);
@@ -521,6 +542,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    if (!user || user.role !== "tenant") {
+      localStorage.removeItem(FAVORITES_STORAGE_KEY);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchFavorites = async () => {
+      const { data, error } = await supabase
+        .from("rental_favorites")
+        .select("rental_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error || !isMounted) {
+        return;
+      }
+
+      const favoriteIds = (data as FavoriteRow[] | null | undefined)
+        ?.map((favorite) => favorite.rental_id)
+        .filter((favoriteId): favoriteId is string => isUuid(favoriteId)) ?? [];
+
+      setFavorites(favoriteIds);
+      persistFavorites(favoriteIds);
+    };
+
+    void fetchFavorites();
+
+    const favoritesChannel = supabase
+      .channel(`rental_favorites_${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rental_favorites",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void fetchFavorites();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(favoritesChannel);
+    };
+  }, [supabase, user]);
+
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
     let isMounted = true;
 
     const upsertProfile = async (authUser: SupabaseAuthUser, role: UserRole) => {
@@ -556,6 +632,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!authUser) {
         setUser(null);
+        setFavorites([]);
+        localStorage.removeItem(FAVORITES_STORAGE_KEY);
         return;
       }
 
@@ -589,6 +667,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isMounted) {
         setUser(nextUser);
+        if (nextUser.role !== "tenant") {
+          setFavorites([]);
+          localStorage.removeItem(FAVORITES_STORAGE_KEY);
+        }
         setLandlordSnapshotsByUserId((prev) => {
           const nextSnapshot = snapshotFromUser(nextUser);
           const currentSnapshot = prev[nextUser.id];
@@ -662,6 +744,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     setUser(null);
+    setFavorites([]);
+    localStorage.removeItem(FAVORITES_STORAGE_KEY);
     localStorage.removeItem(PENDING_ROLE_STORAGE_KEY);
     if (supabase) {
       void supabase.auth.signOut();
@@ -715,16 +799,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const addFavorite = (roomId: string) => {
-    if (favorites.includes(roomId)) return;
+    if (
+      !isUuid(roomId) ||
+      !user ||
+      user.role !== "tenant" ||
+      favorites.includes(roomId)
+    ) {
+      return;
+    }
     const newFavorites = [...favorites, roomId];
     setFavorites(newFavorites);
-    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(newFavorites));
+    persistFavorites(newFavorites);
+
+    if (!supabase) {
+      return;
+    }
+
+    void supabase
+      .from("rental_favorites")
+      .upsert(
+        {
+          user_id: user.id,
+          rental_id: roomId,
+        },
+        { onConflict: "user_id,rental_id" },
+      )
+      .then(({ error }) => {
+        if (!error) {
+          return;
+        }
+
+        setFavorites((prev) => {
+          if (!prev.includes(roomId)) {
+            return prev;
+          }
+          const reverted = prev.filter((id) => id !== roomId);
+          persistFavorites(reverted);
+          return reverted;
+        });
+      });
   };
 
   const removeFavorite = (roomId: string) => {
+    if (
+      !isUuid(roomId) ||
+      !user ||
+      user.role !== "tenant" ||
+      !favorites.includes(roomId)
+    ) {
+      return;
+    }
     const newFavorites = favorites.filter((id) => id !== roomId);
     setFavorites(newFavorites);
-    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(newFavorites));
+    persistFavorites(newFavorites);
+
+    if (!supabase) {
+      return;
+    }
+
+    void supabase
+      .from("rental_favorites")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("rental_id", roomId)
+      .then(({ error }) => {
+        if (!error) {
+          return;
+        }
+
+        setFavorites((prev) => {
+          if (prev.includes(roomId)) {
+            return prev;
+          }
+          const reverted = [roomId, ...prev];
+          persistFavorites(reverted);
+          return reverted;
+        });
+      });
   };
 
   const addRoom = async (room: NewRoomInput): Promise<AddRoomResult> => {

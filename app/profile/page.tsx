@@ -29,7 +29,7 @@ function ProfileContent() {
   } = useAuth();
 
   const selectedTab = searchParams.get("tab");
-  const defaultTab =
+  const requestedTab =
     selectedTab === "bookings" ? "requests" : selectedTab || "profile";
 
   const allRooms = useMemo(() => {
@@ -77,6 +77,11 @@ function ProfileContent() {
   if (!user) {
     return <LoginRequired onGoHome={() => router.push("/")} />;
   }
+
+  const defaultTab =
+    user.role === "landlord" && requestedTab === "favorites"
+      ? "profile"
+      : requestedTab;
 
   return (
     <div className="container mx-auto px-4 py-8">

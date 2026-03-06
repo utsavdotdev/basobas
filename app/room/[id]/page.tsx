@@ -103,6 +103,7 @@ export default function RoomDetailPage() {
 
   const isFavorite = favorites.includes(room.id);
   const isLandlordUser = user?.role === "landlord";
+  const canUseFavorites = !user || user.role === "tenant";
   const isAvailableListing = room.status === "available";
   const isListingOwner = user?.id === room.landlord.id;
 
@@ -120,6 +121,9 @@ export default function RoomDetailPage() {
   const handleFavoriteClick = () => {
     if (!user) {
       setShowLoginPrompt(true);
+      return;
+    }
+    if (user.role === "landlord") {
       return;
     }
     if (isFavorite) {
@@ -331,19 +335,21 @@ export default function RoomDetailPage() {
                       ? "Listing Not Available"
                       : "Request to Rent"}
                 </Button>
-                <Button
-                  variant="outline"
-                  className="w-full bg-transparent"
-                  size="lg"
-                  onClick={handleFavoriteClick}
-                >
-                  <Heart
-                    className={`mr-2 h-5 w-5 ${
-                      isFavorite ? "fill-red-500 text-red-500" : ""
-                    }`}
-                  />
-                  {isFavorite ? "Remove from Favorites" : "Add to Favorites"}
-                </Button>
+                {canUseFavorites && (
+                  <Button
+                    variant="outline"
+                    className="w-full bg-transparent"
+                    size="lg"
+                    onClick={handleFavoriteClick}
+                  >
+                    <Heart
+                      className={`mr-2 h-5 w-5 ${
+                        isFavorite ? "fill-red-500 text-red-500" : ""
+                      }`}
+                    />
+                    {isFavorite ? "Remove from Favorites" : "Add to Favorites"}
+                  </Button>
+                )}
               </div>
               {!user && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
