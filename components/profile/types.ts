@@ -3,6 +3,6 @@ import type { Room } from "@/lib/mock-data";
 
 export type RequestWithRoom = {
   booking: Booking;
-  room: Room;
+  room: Room | null;
   isDemo?: boolean;
 };

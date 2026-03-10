@@ -53,6 +53,7 @@ export interface Room {
   title: string;
   description: string;
   location: string;
+  google_maps_url: string;
   images: string[];
   rental_type: RentalType;
   no_of_rooms: number;
@@ -187,6 +188,7 @@ export const normalizeRoom = (room: unknown): Room | null => {
     };
     createdAt?: string;
     landlord?: Partial<Room["landlord"]>;
+    google_maps_url?: string | null;
   };
 
   const rentalId =
@@ -251,6 +253,10 @@ export const normalizeRoom = (room: unknown): Room | null => {
       typeof raw.location === "string" && raw.location.trim()
         ? raw.location
         : "Unknown location",
+    google_maps_url:
+      typeof raw.google_maps_url === "string" && raw.google_maps_url.trim()
+        ? raw.google_maps_url.trim()
+        : "",
     images: Array.isArray(raw.images)
       ? raw.images.filter((image): image is string => typeof image === "string")
       : [],

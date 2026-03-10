@@ -4,6 +4,7 @@ import { useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Tabs } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { LoginRequired } from "@/components/profile/login-required";
 import { ProfileHeader } from "@/components/profile/profile-header";
 import { ProfileTabsList } from "@/components/profile/profile-tabs-list";
@@ -14,6 +15,7 @@ import { LandlordRequestsTab } from "@/components/profile/landlord-requests-tab"
 import { LandlordListingsTab } from "@/components/profile/landlord-listings-tab";
 import type { RequestWithRoom } from "@/components/profile/types";
 import { ENABLE_BOOKING_REQUESTS, ENABLE_FAVORITES } from "@/lib/launch-flags";
+import { MessageSquare } from "lucide-react";
 
 function ProfileContent() {
   const searchParams = useSearchParams();
@@ -26,6 +28,9 @@ function ProfileContent() {
     verifyPhone,
     logout,
     cancelBooking,
+    deleteBooking,
+    shareBookingContact,
+    shareBookingLocation,
     updateBookingStatus,
   } = useAuth();
 
@@ -53,10 +58,9 @@ function ProfileContent() {
     return bookings
       .filter((booking) => booking.userId === user?.id)
       .map((booking) => {
-        const room = allRooms.find((r) => r.id === booking.roomId);
+        const room = allRooms.find((r) => r.id === booking.roomId) ?? null;
         return { booking, room };
-      })
-      .filter((item): item is RequestWithRoom => item.room !== undefined);
+      });
   }, [allRooms, bookings, user?.id]);
 
   const incomingRequestsWithRoom = useMemo(() => {
@@ -69,36 +73,105 @@ function ProfileContent() {
     return bookings
       .filter((booking) => landlordRoomIds.has(booking.roomId))
       .map((booking) => {
-        const room = allRooms.find((r) => r.id === booking.roomId);
+        const room = allRooms.find((r) => r.id === booking.roomId) ?? null;
         return { booking, room };
       })
-      .filter((item): item is RequestWithRoom => item.room !== undefined);
+      .filter((item): item is RequestWithRoom => item.room !== null);
   }, [allRooms, bookings, user?.id]);
+
+  const pendingIncomingRequestsCount = useMemo(
+    () =>
+      incomingRequestsWithRoom.filter(
+        ({ booking }) => booking.status === "pending",
+      ).length,
+    [incomingRequestsWithRoom],
+  );
+
+  const activeTenantRequestsCount = useMemo(
+    () =>
+      tenantRequestsWithRoom.filter(
+        ({ booking }) =>
+          booking.status === "pending" || booking.status === "approved",
+      ).length,
+    [tenantRequestsWithRoom],
+  );
 
   if (!user) {
     return <LoginRequired onGoHome={() => router.push("/")} />;
   }
 
-  const defaultTab =
+  const activeTab =
     ((!ENABLE_BOOKING_REQUESTS && requestedTab === "requests") ||
       (!ENABLE_FAVORITES && requestedTab === "favorites") ||
       (user.role === "landlord" && requestedTab === "favorites"))
       ? "profile"
+      : !selectedTab &&
+          user.role === "landlord" &&
+          ENABLE_BOOKING_REQUESTS &&
+          pendingIncomingRequestsCount > 0
+        ? "requests"
       : requestedTab;
+
+  const handleTabChange = (nextTab: string) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+
+    if (nextTab === "profile") {
+      nextParams.delete("tab");
+    } else {
+      nextParams.set("tab", nextTab);
+    }
+
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `/profile?${nextQuery}` : "/profile", {
+      scroll: false,
+    });
+  };
 
   return (
     <div className="container mx-auto px-4 py-8">
       <ProfileHeader user={user} onLogout={logout} />
 
-      <Tabs defaultValue={defaultTab} className="space-y-6">
+      {user.role === "landlord" &&
+        ENABLE_BOOKING_REQUESTS &&
+        pendingIncomingRequestsCount > 0 &&
+        activeTab !== "requests" && (
+          <div className="mb-6 flex flex-col gap-4 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-amber-100 p-2">
+                <MessageSquare className="h-5 w-5 text-amber-700" />
+              </div>
+              <div>
+                <p className="font-medium text-amber-900">
+                  You have {pendingIncomingRequestsCount} pending booking
+                  request{pendingIncomingRequestsCount > 1 ? "s" : ""}.
+                </p>
+                <p className="text-sm text-amber-800">
+                  Review and approve or reject them from your requests tab.
+                </p>
+              </div>
+            </div>
+            <Button
+              onClick={() => handleTabChange("requests")}
+              className="sm:self-start"
+            >
+              Review Requests
+            </Button>
+          </div>
+        )}
+
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className="space-y-6"
+      >
         <ProfileTabsList
           role={user.role}
           tenantRequestsCount={
-            ENABLE_BOOKING_REQUESTS ? tenantRequestsWithRoom.length : 0
+            ENABLE_BOOKING_REQUESTS ? activeTenantRequestsCount : 0
           }
           favoritesCount={ENABLE_FAVORITES ? favorites.length : 0}
           landlordRequestsCount={
-            ENABLE_BOOKING_REQUESTS ? incomingRequestsWithRoom.length : 0
+            ENABLE_BOOKING_REQUESTS ? pendingIncomingRequestsCount : 0
           }
           landlordListingsCount={landlordListings.length}
         />
@@ -111,6 +184,7 @@ function ProfileContent() {
               <TenantRequestsTab
                 requests={tenantRequestsWithRoom}
                 onCancelBooking={cancelBooking}
+                onDeleteBooking={deleteBooking}
               />
             )}
             {ENABLE_FAVORITES && <TenantFavoritesTab favoriteRooms={favoriteRooms} />}
@@ -122,10 +196,14 @@ function ProfileContent() {
             {ENABLE_BOOKING_REQUESTS && (
               <LandlordRequestsTab
                 requests={incomingRequestsWithRoom}
+                onShareContact={shareBookingContact}
+                onShareLocation={shareBookingLocation}
                 onUpdateBookingStatus={updateBookingStatus}
               />
             )}
-            <LandlordListingsTab landlordListings={landlordListings} />
+            <LandlordListingsTab
+              landlordListings={landlordListings}
+            />
           </>
         )}
       </Tabs>

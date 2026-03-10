@@ -16,18 +16,33 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowUpRight, Calendar, XCircle } from "lucide-react";
+import {
+  ArrowUpRight,
+  Calendar,
+  ExternalLink,
+  MapPinned,
+  PhoneCall,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import type { RequestWithRoom } from "@/components/profile/types";
-import { formatDate, formatDuration, getStatusColor } from "@/components/profile/utils";
+import {
+  formatDate,
+  formatDuration,
+  getDialablePhone,
+  getStatusColor,
+} from "@/components/profile/utils";
 
 interface TenantRequestsTabProps {
   requests: RequestWithRoom[];
   onCancelBooking: (bookingId: string) => void;
+  onDeleteBooking: (bookingId: string) => void;
 }
 
 export function TenantRequestsTab({
   requests,
   onCancelBooking,
+  onDeleteBooking,
 }: TenantRequestsTabProps) {
   return (
     <TabsContent value="requests">
@@ -39,22 +54,31 @@ export function TenantRequestsTab({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-1">
-                      <Link
-                        href={`/room/${booking.roomId}`}
-                        className="truncate text-sm font-semibold hover:text-primary"
-                      >
-                        {room.title}
-                      </Link>
-                      <Link
-                        href={`/room/${booking.roomId}`}
-                        className="text-muted-foreground transition-colors hover:text-primary"
-                        aria-label={`Open ${room.title}`}
-                      >
-                        <ArrowUpRight className="h-4 w-4" />
-                      </Link>
+                      {room ? (
+                        <>
+                          <Link
+                            href={`/room/${booking.roomId}`}
+                            className="truncate text-sm font-semibold hover:text-primary"
+                          >
+                            {room.title}
+                          </Link>
+                          <Link
+                            href={`/room/${booking.roomId}`}
+                            className="text-muted-foreground transition-colors hover:text-primary"
+                            aria-label={`Open ${room.title}`}
+                          >
+                            <ArrowUpRight className="h-4 w-4" />
+                          </Link>
+                        </>
+                      ) : (
+                        <span className="truncate text-sm font-semibold">
+                          Listing unavailable
+                        </span>
+                      )}
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
-                      {room.location}
+                      {room?.location ??
+                        "This listing is no longer visible in tenant browsing."}
                     </p>
                   </div>
                   <Badge className={getStatusColor(booking.status)}>
@@ -95,11 +119,53 @@ export function TenantRequestsTab({
                     {booking.reviewMessage}
                   </div>
                 )}
+
+                {booking.sharedLandlordPhone &&
+                (booking.status === "pending" ||
+                  booking.status === "approved") ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50/80 px-3 py-2 text-sm text-blue-800">
+                    Landlord contact shared: {booking.sharedLandlordPhone}
+                  </div>
+                ) : null}
+
+                {booking.sharedLocationUrl && (
+                  <div className="rounded-md border border-green-200 bg-green-50/80 px-3 py-2 text-sm text-green-800">
+                    Exact location shared by landlord.
+                  </div>
+                )}
               </CardContent>
               <CardFooter className="flex flex-wrap justify-end gap-2 px-4 pb-4 pt-0">
-                <Button asChild variant="outline" size="sm" className="h-8">
-                  <Link href={`/room/${booking.roomId}`}>View Room</Link>
-                </Button>
+                {booking.sharedLandlordPhone &&
+                (booking.status === "pending" ||
+                  booking.status === "approved") &&
+                getDialablePhone(booking.sharedLandlordPhone) ? (
+                  <Button asChild variant="outline" size="sm" className="h-8">
+                    <a
+                      href={`tel:${getDialablePhone(booking.sharedLandlordPhone)}`}
+                    >
+                      <PhoneCall className="mr-2 h-4 w-4" />
+                      Call Landlord
+                    </a>
+                  </Button>
+                ) : null}
+                {booking.sharedLocationUrl ? (
+                  <Button asChild size="sm" className="h-8">
+                    <a
+                      href={booking.sharedLocationUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <MapPinned className="mr-2 h-4 w-4" />
+                      View in Google Maps
+                      <ExternalLink className="ml-2 h-4 w-4" />
+                    </a>
+                  </Button>
+                ) : null}
+                {room ? (
+                  <Button asChild variant="outline" size="sm" className="h-8">
+                    <Link href={`/room/${booking.roomId}`}>View Room</Link>
+                  </Button>
+                ) : null}
                 {(booking.status === "pending" || booking.status === "approved") && (
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
@@ -123,6 +189,32 @@ export function TenantRequestsTab({
                           className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         >
                           Yes, Cancel
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+                {booking.status === "cancelled" && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 px-3">
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Cancelled Request</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Remove this cancelled request from your profile history.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Keep Request</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => onDeleteBooking(booking.id)}
+                        >
+                          Delete Request
                         </AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>

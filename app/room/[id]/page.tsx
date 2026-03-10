@@ -17,9 +17,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Calendar } from "@/components/ui/calendar";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -53,6 +65,11 @@ import {
   CheckCircle2,
   ArrowLeft,
   CalendarIcon,
+  Pencil,
+  RotateCcw,
+  Trash2,
+  Home,
+  AlertCircle,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -74,7 +91,10 @@ export default function RoomDetailPage() {
     addFavorite,
     removeFavorite,
     postedRooms,
+    bookings,
     addBooking,
+    updateRoomStatus,
+    deleteRoom,
   } = useAuth();
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
@@ -88,6 +108,13 @@ export default function RoomDetailPage() {
     useState(false);
   const [showVerificationRequired, setShowVerificationRequired] =
     useState(false);
+  const [bookingError, setBookingError] = useState<string | null>(null);
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
+  const [ownerActionError, setOwnerActionError] = useState<string | null>(null);
+  const [ownerAction, setOwnerAction] = useState<
+    "available" | "inactive" | "delete" | null
+  >(null);
+  const [isNavigatingAfterDelete, setIsNavigatingAfterDelete] = useState(false);
 
   const allRooms = useMemo(() => {
     return postedRooms
@@ -97,6 +124,10 @@ export default function RoomDetailPage() {
 
   const roomIdParam = Array.isArray(params.id) ? params.id[0] : params.id;
   const room = allRooms.find((r) => r.id === roomIdParam);
+
+  if (isNavigatingAfterDelete) {
+    return null;
+  }
 
   if (!room) {
     notFound();
@@ -108,6 +139,26 @@ export default function RoomDetailPage() {
     ENABLE_FAVORITES && (!user || user.role === "tenant");
   const isAvailableListing = room.status === "available";
   const isListingOwner = user?.id === room.landlord.id;
+  const activeBookingForRoom = bookings.find(
+    (booking) =>
+      booking.roomId === room.id &&
+      booking.userId === user?.id &&
+      (booking.status === "pending" || booking.status === "approved"),
+  );
+  const bookingButtonLabel =
+    isListingOwner
+      ? "You Own This Listing"
+      : isLandlordUser
+        ? "Landlords Cannot Request Rentals"
+      : activeBookingForRoom?.status === "pending"
+        ? "Request Pending"
+      : activeBookingForRoom?.status === "approved"
+        ? "Request Approved"
+      : !ENABLE_BOOKING_REQUESTS
+        ? "Booking Request Coming Soon"
+        : !isAvailableListing
+          ? "Listing Not Available"
+          : "Request to Rent";
   const guestActionHint =
     ENABLE_BOOKING_REQUESTS && ENABLE_FAVORITES
       ? "Login to request or save this listing."
@@ -117,16 +168,10 @@ export default function RoomDetailPage() {
           ? "Login to request this listing."
           : "Login to continue.";
 
-  const roomImages = useMemo(() => {
-    if (
-      room.images &&
-      room.images.length > 0 &&
-      room.images.some((img) => img)
-    ) {
-      return room.images.filter((img) => img);
-    }
-    return defaultRoomImages;
-  }, [room.images]);
+  const roomImages =
+    room.images && room.images.length > 0 && room.images.some((img) => img)
+      ? room.images.filter((img) => img)
+      : defaultRoomImages;
 
   const handleFavoriteClick = () => {
     if (!user) {
@@ -154,7 +199,12 @@ export default function RoomDetailPage() {
       setShowLoginPrompt(true);
       return;
     }
-    if (isLandlordUser || isListingOwner || !isAvailableListing) {
+    if (
+      isLandlordUser ||
+      isListingOwner ||
+      !isAvailableListing ||
+      activeBookingForRoom
+    ) {
       return;
     }
     if (!user.verified) {
@@ -162,16 +212,21 @@ export default function RoomDetailPage() {
       return;
     }
     const today = new Date();
+    setBookingError(null);
+    setBookingConfirmed(false);
     setMoveInDate(today);
     setStayDurationMonths(12);
     setTenantMessage("");
     setShowBookingDialog(true);
   };
 
-  const handleConfirmBooking = () => {
+  const handleConfirmBooking = async () => {
     if (!moveInDate || !stayDurationMonths || !user) return;
 
-    const bookingCreated = addBooking({
+    setBookingError(null);
+    setIsSubmittingBooking(true);
+
+    const bookingResult = await addBooking({
       roomId: room.id,
       userId: user.id,
       landlordId: room.landlord.id,
@@ -179,11 +234,19 @@ export default function RoomDetailPage() {
       tenantEmail: user.email,
       tenantPhone: user.phone || "",
       tenantMessage: tenantMessage.trim() || undefined,
-      moveInDate: moveInDate.toISOString(),
+      moveInDate: format(moveInDate, "yyyy-MM-dd"),
       stayDurationMonths,
     });
-    if (!bookingCreated) {
-      setShowDuplicateRequestDialog(true);
+
+    setIsSubmittingBooking(false);
+
+    if (!bookingResult.success) {
+      if (bookingResult.code === "duplicate") {
+        setShowDuplicateRequestDialog(true);
+        return;
+      }
+
+      setBookingError(bookingResult.error);
       return;
     }
 
@@ -192,10 +255,43 @@ export default function RoomDetailPage() {
 
   const handleBookingClose = () => {
     setShowBookingDialog(false);
+    setBookingError(null);
+    setIsSubmittingBooking(false);
     if (bookingConfirmed) {
       setBookingConfirmed(false);
       router.push("/profile?tab=requests");
     }
+  };
+
+  const handleOwnerStatusChange = async (
+    nextStatus: Extract<Room["status"], "available" | "inactive">,
+  ) => {
+    setOwnerActionError(null);
+    setOwnerAction(nextStatus);
+
+    const result = await updateRoomStatus(room.rental_id, nextStatus);
+
+    setOwnerAction(null);
+
+    if (!result.success) {
+      setOwnerActionError(result.error);
+    }
+  };
+
+  const handleOwnerDelete = async () => {
+    setOwnerActionError(null);
+    setOwnerAction("delete");
+
+    const result = await deleteRoom(room.rental_id);
+
+    if (!result.success) {
+      setOwnerAction(null);
+      setOwnerActionError(result.error);
+      return;
+    }
+
+    setIsNavigatingAfterDelete(true);
+    router.replace("/profile?tab=listings");
   };
 
   const flatConfiguration = getFlatConfigurationLabel(room);
@@ -330,9 +426,18 @@ export default function RoomDetailPage() {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    {room.landlord.email || "Email not shared"}
-                  </p>
+                  {room.landlord.email ? (
+                    <a
+                      href={`mailto:${room.landlord.email}`}
+                      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {room.landlord.email}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Contact details unavailable
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -347,16 +452,11 @@ export default function RoomDetailPage() {
                     !ENABLE_BOOKING_REQUESTS ||
                     isLandlordUser ||
                     isListingOwner ||
-                    !isAvailableListing
+                    !isAvailableListing ||
+                    Boolean(activeBookingForRoom)
                   }
                 >
-                  {!ENABLE_BOOKING_REQUESTS
-                    ? "Booking Request Coming Soon"
-                    : isLandlordUser || isListingOwner
-                    ? "Landlords Cannot Book"
-                    : !isAvailableListing
-                      ? "Listing Not Available"
-                      : "Request to Rent"}
+                  {bookingButtonLabel}
                 </Button>
                 {canUseFavorites && (
                   <Button
@@ -379,10 +479,27 @@ export default function RoomDetailPage() {
                   {guestActionHint}
                 </p>
               )}
-              {isLandlordUser && (
+              {isListingOwner && (
                 <p className="mt-4 text-center text-sm text-muted-foreground">
-                  Landlord accounts can only manage listings and incoming tenant
-                  requests.
+                  Use the management panel below to edit, pause, reactivate, or
+                  delete this listing.
+                </p>
+              )}
+              {isLandlordUser && !isListingOwner && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  Landlord accounts cannot send rental requests. Review incoming
+                  tenant requests from your profile.
+                </p>
+              )}
+              {activeBookingForRoom?.status === "pending" && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  You already have a pending request for this rental. Track it
+                  from your profile requests tab.
+                </p>
+              )}
+              {activeBookingForRoom?.status === "approved" && (
+                <p className="mt-4 text-center text-sm text-muted-foreground">
+                  Your request for this rental has already been approved.
                 </p>
               )}
               {!ENABLE_BOOKING_REQUESTS && (
@@ -397,6 +514,92 @@ export default function RoomDetailPage() {
                 </p>
               )}
             </div>
+
+            {isListingOwner && (
+              <div className="rounded-xl border p-6">
+                <h2 className="text-lg font-semibold">Manage listing</h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {room.status === "rented"
+                    ? "This room is marked as rented. Make it available again after the tenant moves out."
+                    : room.status === "inactive"
+                      ? "This listing is hidden from tenants until you reactivate it."
+                      : "Keep the listing details current or pause it temporarily."}
+                </p>
+
+                {ownerActionError && (
+                  <Alert variant="destructive" className="mt-4">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{ownerActionError}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="mt-4 space-y-3">
+                  <Button asChild variant="outline" className="w-full bg-transparent">
+                    <Link href={`/post-room?edit=${room.rental_id}`}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit Listing
+                    </Link>
+                  </Button>
+
+                  {room.status === "available" ? (
+                    <Button
+                      variant="outline"
+                      className="w-full bg-transparent"
+                      disabled={ownerAction !== null}
+                      onClick={() => void handleOwnerStatusChange("inactive")}
+                    >
+                      <Home className="mr-2 h-4 w-4" />
+                      {ownerAction === "inactive" ? "Pausing..." : "Mark Inactive"}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      className="w-full bg-transparent"
+                      disabled={ownerAction !== null}
+                      onClick={() => void handleOwnerStatusChange("available")}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      {ownerAction === "available"
+                        ? "Updating..."
+                        : "Make Available"}
+                    </Button>
+                  )}
+
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        className="w-full"
+                        disabled={ownerAction !== null}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Listing
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Listing</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This permanently removes the rental and its related
+                          requests. This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Keep Listing</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => void handleOwnerDelete()}
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          {ownerAction === "delete"
+                            ? "Deleting..."
+                            : "Delete Listing"}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -503,6 +706,12 @@ export default function RoomDetailPage() {
               <p className="text-sm text-muted-foreground">
                 Your request stays pending until the landlord responds.
               </p>
+
+              {bookingError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{bookingError}</AlertDescription>
+                </Alert>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -518,9 +727,11 @@ export default function RoomDetailPage() {
                 </Button>
                 <Button
                   onClick={handleConfirmBooking}
-                  disabled={!moveInDate || !stayDurationMonths}
+                  disabled={
+                    isSubmittingBooking || !moveInDate || !stayDurationMonths
+                  }
                 >
-                  Submit Request
+                  {isSubmittingBooking ? "Submitting..." : "Submit Request"}
                 </Button>
               </>
             )}

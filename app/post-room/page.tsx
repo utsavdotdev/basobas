@@ -1,8 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import {
+  buildGoogleMapsEmbedUrl,
+  buildGoogleMapsUrlFromCoordinates,
+  extractCoordinatesFromGoogleMapsUrl,
+  normalizeGoogleMapsUrl,
+} from "@/lib/google-maps";
 import {
   bathroomTypeLabels,
   configurationLabels,
@@ -31,10 +37,20 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { LogIn, AlertCircle, CheckCircle2, Home } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ExternalLink,
+  Home,
+  LoaderCircle,
+  LocateFixed,
+  LogIn,
+  MapPinned,
+} from "lucide-react";
 
 type FormData = {
   location: string;
+  google_maps_url: string;
   description: string;
   rental_type: Room["rental_type"];
   no_of_rooms: string;
@@ -48,6 +64,7 @@ type FormData = {
 
 const initialFormData: FormData = {
   location: "",
+  google_maps_url: "",
   description: "",
   rental_type: "single_room",
   no_of_rooms: "1",
@@ -59,17 +76,57 @@ const initialFormData: FormData = {
   water_facility: "supply_24x7",
 };
 
-export default function PostRoomPage() {
+type MapPinNotice = {
+  kind: "success" | "error";
+  message: string;
+};
+
+function PostRoomContent() {
   const router = useRouter();
-  const { user, addRoom } = useAuth();
+  const searchParams = useSearchParams();
+  const { user, postedRooms, addRoom, updateRoom } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState<FormData>(initialFormData);
+  const [mapPinNotice, setMapPinNotice] = useState<MapPinNotice | null>(null);
+  const [isLocatingPin, setIsLocatingPin] = useState(false);
+  const [didHydrateEditForm, setDidHydrateEditForm] = useState(false);
   const isFlat = formData.rental_type === "flat";
   const isSingleRoom = formData.rental_type === "single_room";
   const isMultipleRoom = formData.rental_type === "multiple_room";
+  const normalizedGoogleMapsUrl = useMemo(
+    () => normalizeGoogleMapsUrl(formData.google_maps_url),
+    [formData.google_maps_url],
+  );
+  const selectedMapCoordinates = useMemo(
+    () => extractCoordinatesFromGoogleMapsUrl(formData.google_maps_url),
+    [formData.google_maps_url],
+  );
+  const mapPreviewUrl = useMemo(() => {
+    if (!selectedMapCoordinates) {
+      return null;
+    }
+
+    return buildGoogleMapsEmbedUrl(
+      selectedMapCoordinates.latitude,
+      selectedMapCoordinates.longitude,
+    );
+  }, [selectedMapCoordinates]);
+  const editRoomId = searchParams.get("edit");
+  const isEditMode = Boolean(editRoomId);
+  const editingRoom = useMemo(() => {
+    if (!editRoomId || !user) {
+      return null;
+    }
+
+    return (
+      postedRooms.find(
+        (room) => room.rental_id === editRoomId && room.user_id === user.id,
+      ) ?? null
+    );
+  }, [editRoomId, postedRooms, user]);
 
   const clearError = (key: string) => {
     setFormErrors((prev) => {
@@ -78,6 +135,112 @@ export default function PostRoomPage() {
       delete next[key];
       return next;
     });
+  };
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!isEditMode || !editingRoom || didHydrateEditForm) {
+      return;
+    }
+
+    setFormData({
+      location: editingRoom.location,
+      google_maps_url: editingRoom.google_maps_url,
+      description: editingRoom.description,
+      rental_type: editingRoom.rental_type,
+      no_of_rooms: String(editingRoom.no_of_rooms),
+      configuration: editingRoom.configuration ?? "bhk",
+      config_unit: String(editingRoom.config_unit ?? editingRoom.no_of_rooms),
+      rent: String(editingRoom.rent),
+      is_kitchen: editingRoom.is_kitchen,
+      bathroom_type: editingRoom.bathroom_type,
+      water_facility: editingRoom.water_facility,
+    });
+    setSelectedImages(editingRoom.images);
+    setDidHydrateEditForm(true);
+  }, [didHydrateEditForm, editingRoom, isEditMode]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (
+      !isEditMode ||
+      !editingRoom?.google_maps_url ||
+      formData.google_maps_url.trim()
+    ) {
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      google_maps_url: editingRoom.google_maps_url,
+    }));
+  }, [editingRoom?.google_maps_url, formData.google_maps_url, isEditMode]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const handleUseCurrentLocation = () => {
+    if (typeof window === "undefined" || !("geolocation" in navigator)) {
+      setMapPinNotice({
+        kind: "error",
+        message:
+          "Browser location is not available on this device. Paste a Google Maps link instead.",
+      });
+      return;
+    }
+
+    setIsLocatingPin(true);
+    setMapPinNotice(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const generatedUrl = buildGoogleMapsUrlFromCoordinates(
+          position.coords.latitude,
+          position.coords.longitude,
+        );
+
+        if (!generatedUrl) {
+          setMapPinNotice({
+            kind: "error",
+            message:
+              "The detected coordinates were invalid. Please try again or paste a Google Maps link.",
+          });
+          setIsLocatingPin(false);
+          return;
+        }
+
+        setFormData((prev) => ({
+          ...prev,
+          google_maps_url: generatedUrl,
+        }));
+        clearError("google_maps_url");
+        clearError("submit");
+        setMapPinNotice({
+          kind: "success",
+          message:
+            "Exact pin captured from your current browser location. Review the preview, then save the listing.",
+        });
+        setIsLocatingPin(false);
+      },
+      (error: GeolocationPositionError) => {
+        const message =
+          error.code === error.PERMISSION_DENIED
+            ? "Location permission was denied. Allow access and try again, or paste a Google Maps link."
+            : error.code === error.TIMEOUT
+              ? "Location detection timed out. Move closer to the property and try again."
+              : "Unable to detect your current location. Check device location services and try again.";
+
+        setMapPinNotice({
+          kind: "error",
+          message,
+        });
+        setIsLocatingPin(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      },
+    );
   };
 
   if (!user) {
@@ -136,28 +299,57 @@ export default function PostRoomPage() {
     );
   }
 
+  if (isEditMode && didHydrateEditForm && !editingRoom) {
+    return (
+      <div className="container mx-auto flex min-h-[60vh] flex-col items-center justify-center px-4 py-16 text-center">
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-red-100">
+          <AlertCircle className="h-10 w-10 text-red-600" />
+        </div>
+        <h1 className="mt-6 text-2xl font-bold">Listing Not Found</h1>
+        <p className="mt-2 max-w-md text-muted-foreground">
+          This rental could not be found or does not belong to your landlord
+          account.
+        </p>
+        <Button
+          className="mt-6"
+          onClick={() => router.push("/profile?tab=listings")}
+        >
+          Go to My Listings
+        </Button>
+      </div>
+    );
+  }
+
   if (submitted) {
     return (
       <div className="container mx-auto flex min-h-[60vh] flex-col items-center justify-center px-4 py-16 text-center">
         <div className="flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
           <CheckCircle2 className="h-10 w-10 text-green-600" />
         </div>
-        <h1 className="mt-6 text-2xl font-bold">Rental Posted Successfully!</h1>
+        <h1 className="mt-6 text-2xl font-bold">
+          {isEditMode ? "Rental Updated Successfully!" : "Rental Posted Successfully!"}
+        </h1>
         <p className="mt-4 max-w-md text-muted-foreground">
-          Your rental listing has been saved in Supabase and is now visible to
-          tenants.
+          {isEditMode
+            ? "Your rental listing has been updated in Supabase."
+            : "Your rental listing has been saved in Supabase and is now visible to tenants."}
         </p>
         <div className="mt-8 flex gap-3">
           <Button
             variant="outline"
             onClick={() => {
               setSubmitted(false);
-              setFormData(initialFormData);
-              setSelectedImages([]);
               setFormErrors({});
+              setMapPinNotice(null);
+              if (isEditMode) {
+                setDidHydrateEditForm(false);
+              } else {
+                setFormData(initialFormData);
+                setSelectedImages([]);
+              }
             }}
           >
-            Post Another Rental
+            {isEditMode ? "Continue Editing" : "Post Another Rental"}
           </Button>
           <Button onClick={() => router.push("/profile?tab=listings")}>
             View My Listings
@@ -171,6 +363,13 @@ export default function PostRoomPage() {
     const errors: Record<string, string> = {};
 
     if (!formData.location.trim()) errors.location = "Location is required";
+
+    if (
+      formData.google_maps_url.trim() &&
+      !normalizeGoogleMapsUrl(formData.google_maps_url)
+    ) {
+      errors.google_maps_url = "Please enter a valid Google Maps share URL";
+    }
 
     if (!formData.description.trim()) {
       errors.description = "Description is required";
@@ -225,9 +424,10 @@ export default function PostRoomPage() {
     const normalizedRoomCount =
       Number.isInteger(roomCount) && roomCount > 0 ? roomCount : 1;
 
-    const result = await addRoom({
+    const roomPayload = {
       rental_type: formData.rental_type,
       location: formData.location.trim(),
+      google_maps_url: formData.google_maps_url.trim(),
       description: formData.description.trim(),
       images: selectedImages,
       no_of_rooms: normalizedRoomCount,
@@ -237,7 +437,11 @@ export default function PostRoomPage() {
       is_kitchen: isFlat ? true : formData.is_kitchen,
       bathroom_type: formData.bathroom_type,
       water_facility: formData.water_facility,
-    });
+    };
+    const result =
+      isEditMode && editRoomId
+        ? await updateRoom(editRoomId, roomPayload)
+        : await addRoom(roomPayload);
 
     setIsSubmitting(false);
 
@@ -258,9 +462,13 @@ export default function PostRoomPage() {
               <Home className="h-6 w-6 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold">Create Rental Listing</h1>
+              <h1 className="text-3xl font-bold">
+                {isEditMode ? "Edit Rental Listing" : "Create Rental Listing"}
+              </h1>
               <p className="text-muted-foreground">
-                Publish your rental with details and photos
+                {isEditMode
+                  ? "Update your rental details and photos"
+                  : "Publish your rental with details and photos"}
               </p>
             </div>
           </div>
@@ -269,8 +477,9 @@ export default function PostRoomPage() {
         <Alert className="mb-6 border-blue-200 bg-blue-50/80 backdrop-blur">
           <AlertCircle className="h-4 w-4 text-blue-600" />
           <AlertDescription className="text-blue-900">
-            You are posting as a landlord. Listing data and room photos are
-            saved in Supabase.
+            {isEditMode
+              ? "You are updating this listing as a landlord. Changes are saved directly in Supabase."
+              : "You are posting as a landlord. Listing data and room photos are saved in Supabase."}
           </AlertDescription>
         </Alert>
 
@@ -363,6 +572,144 @@ export default function PostRoomPage() {
                   {formErrors.location && (
                     <p className="text-xs text-red-500">
                       {formErrors.location}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    This is the public area tenants see. Use the private map pin
+                    below for the exact location.
+                  </p>
+                </div>
+
+                <div className="space-y-2 sm:col-span-2">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <Label htmlFor="google_maps_url">
+                        Google Maps Pin (Optional)
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        This stays private. Tenants only see it if you
+                        explicitly share it from an approved request.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleUseCurrentLocation}
+                      disabled={isLocatingPin}
+                    >
+                      {isLocatingPin ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        <LocateFixed />
+                      )}
+                      {isLocatingPin ? "Locating..." : "Use Current Location"}
+                    </Button>
+                  </div>
+                  <div className="space-y-3 rounded-xl border bg-muted/30 p-4">
+                    <p className="text-sm text-muted-foreground">
+                      If you are standing at the property, allow browser
+                      location access and BasoBas will create the exact Google
+                      Maps pin for you automatically.
+                    </p>
+                    <Input
+                      id="google_maps_url"
+                      placeholder="Paste a Google Maps share link, or use current location"
+                      value={formData.google_maps_url}
+                      onChange={(e) => {
+                        setFormData((prev) => ({
+                          ...prev,
+                          google_maps_url: e.target.value,
+                        }));
+                        setMapPinNotice(null);
+                        clearError("google_maps_url");
+                        clearError("submit");
+                      }}
+                      className={
+                        formErrors.google_maps_url ? "border-red-500" : ""
+                      }
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      {normalizedGoogleMapsUrl ? (
+                        <Button asChild variant="secondary" size="sm">
+                          <a
+                            href={normalizedGoogleMapsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <ExternalLink />
+                            Open in Google Maps
+                          </a>
+                        </Button>
+                      ) : null}
+                      {formData.google_maps_url.trim() ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setFormData((prev) => ({
+                              ...prev,
+                              google_maps_url: "",
+                            }));
+                            setMapPinNotice(null);
+                            clearError("google_maps_url");
+                            clearError("submit");
+                          }}
+                        >
+                          Clear Pin
+                        </Button>
+                      ) : null}
+                    </div>
+                    {mapPinNotice ? (
+                      <Alert
+                        className={
+                          mapPinNotice.kind === "error"
+                            ? "border-red-200 bg-red-50/80"
+                            : "border-emerald-200 bg-emerald-50/80"
+                        }
+                      >
+                        {mapPinNotice.kind === "error" ? (
+                          <AlertCircle className="h-4 w-4 text-red-600" />
+                        ) : (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        )}
+                        <AlertDescription
+                          className={
+                            mapPinNotice.kind === "error"
+                              ? "text-red-900"
+                              : "text-emerald-900"
+                          }
+                        >
+                          {mapPinNotice.message}
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+                    {mapPreviewUrl && selectedMapCoordinates ? (
+                      <div className="overflow-hidden rounded-lg border bg-background">
+                        <div className="flex flex-col gap-2 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <MapPinned className="h-4 w-4 text-primary" />
+                            Exact Pin Preview
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {selectedMapCoordinates.latitude.toFixed(6)},{" "}
+                            {selectedMapCoordinates.longitude.toFixed(6)}
+                          </p>
+                        </div>
+                        <iframe
+                          title="Google Maps pin preview"
+                          src={mapPreviewUrl}
+                          className="h-64 w-full border-0"
+                          loading="lazy"
+                          referrerPolicy="no-referrer-when-downgrade"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  {formErrors.google_maps_url && (
+                    <p className="text-xs text-red-500">
+                      {formErrors.google_maps_url}
                     </p>
                   )}
                 </div>
@@ -626,11 +973,27 @@ export default function PostRoomPage() {
               Cancel
             </Button>
             <Button type="submit" className="flex-1" disabled={isSubmitting}>
-              {isSubmitting ? "Posting Rental..." : "Post Rental"}
+              {isSubmitting
+                ? isEditMode
+                  ? "Saving Changes..."
+                  : "Posting Rental..."
+                : isEditMode
+                  ? "Save Changes"
+                  : "Post Rental"}
             </Button>
           </div>
         </form>
       </div>
     </div>
+  );
+}
+
+export default function PostRoomPage() {
+  return (
+    <Suspense
+      fallback={<div className="container mx-auto px-4 py-8">Loading...</div>}
+    >
+      <PostRoomContent />
+    </Suspense>
   );
 }

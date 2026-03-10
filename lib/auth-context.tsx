@@ -7,7 +7,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
+import type {
+  SupabaseClient,
+  User as SupabaseAuthUser,
+} from "@supabase/supabase-js";
 import {
   getFlatConfigurationLabel,
   normalizeRoom,
@@ -17,6 +20,7 @@ import {
 } from "./mock-data";
 import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { isUserRole, type UserRole } from "@/lib/auth/roles";
+import { normalizeGoogleMapsUrl } from "@/lib/google-maps";
 import { normalizeNepaliPhone } from "@/lib/phone";
 import { ENABLE_BOOKING_REQUESTS, ENABLE_FAVORITES } from "@/lib/launch-flags";
 
@@ -37,17 +41,30 @@ export interface Booking {
   createdAt: string;
   reviewedAt?: string;
   reviewMessage?: string;
+  sharedLandlordPhone?: string;
+  sharedLandlordPhoneAt?: string;
+  sharedLocationUrl?: string;
+  sharedLocationAt?: string;
 }
 
 type NewBookingInput = Omit<
   Booking,
-  "id" | "createdAt" | "status" | "reviewedAt" | "reviewMessage"
+  | "id"
+  | "createdAt"
+  | "status"
+  | "reviewedAt"
+  | "reviewMessage"
+  | "sharedLandlordPhone"
+  | "sharedLandlordPhoneAt"
+  | "sharedLocationUrl"
+  | "sharedLocationAt"
 >;
 
 export type NewRoomInput = Pick<
   Room,
   | "rental_type"
   | "location"
+  | "google_maps_url"
   | "description"
   | "images"
   | "no_of_rooms"
@@ -63,6 +80,41 @@ type AddRoomResult =
   | { success: true; room: Room }
   | { success: false; error: string };
 
+type RoomMutationResult =
+  | { success: true; room: Room }
+  | { success: false; error: string };
+
+type RoomActionResult =
+  | { success: true }
+  | { success: false; error: string };
+
+type BookingRequestResult =
+  | { success: true; booking: Booking }
+  | {
+      success: false;
+      code:
+        | "disabled"
+        | "unavailable"
+        | "unauthorized"
+        | "duplicate"
+        | "invalid"
+        | "error";
+      error: string;
+    };
+
+export type BookingMutationResult =
+  | { success: true }
+  | {
+      success: false;
+      code:
+        | "disabled"
+        | "unavailable"
+        | "unauthorized"
+        | "invalid"
+        | "error";
+      error: string;
+    };
+
 interface AuthContextType {
   user: User | null;
   login: (role: UserRole) => void;
@@ -73,19 +125,30 @@ interface AuthContextType {
   removeFavorite: (roomId: string) => void;
   postedRooms: Room[];
   addRoom: (room: NewRoomInput) => Promise<AddRoomResult>;
+  updateRoom: (roomId: string, room: NewRoomInput) => Promise<RoomMutationResult>;
+  updateRoomStatus: (
+    roomId: string,
+    status: Room["status"],
+  ) => Promise<RoomMutationResult>;
+  deleteRoom: (roomId: string) => Promise<RoomActionResult>;
   bookings: Booking[];
-  addBooking: (booking: NewBookingInput) => boolean;
-  cancelBooking: (bookingId: string) => void;
+  addBooking: (booking: NewBookingInput) => Promise<BookingRequestResult>;
+  cancelBooking: (bookingId: string) => Promise<BookingMutationResult>;
+  deleteBooking: (bookingId: string) => Promise<BookingMutationResult>;
+  shareBookingContact: (bookingId: string) => Promise<BookingMutationResult>;
+  shareBookingLocation: (
+    bookingId: string,
+    sharedLocationUrl: string,
+  ) => Promise<BookingMutationResult>;
   updateBookingStatus: (
     bookingId: string,
     status: "approved" | "rejected",
     reviewMessage?: string,
-  ) => void;
+  ) => Promise<BookingMutationResult>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const BOOKING_STORAGE_KEY = "homgwe_bookings";
 const FAVORITES_STORAGE_KEY = "homgwe_favorites";
 const POSTED_ROOMS_STORAGE_KEY = "homgwe_posted_rooms";
 const LANDLORD_SNAPSHOTS_STORAGE_KEY = "homgwe_landlord_snapshots";
@@ -113,8 +176,39 @@ interface RentalRow {
   is_kitchen: boolean;
   bathroom_type: Room["bathroom_type"];
   water_facility: Room["water_facility"];
+  landlord_name: string | null;
+  landlord_email: string | null;
+  landlord_avatar_url: string | null;
+  landlord_phone_verified: boolean | null;
   created_at: string;
   updated_at: string;
+}
+
+interface RentalPrivateDetailRow {
+  rental_id: string;
+  owner_user_id: string;
+  google_maps_url: string | null;
+}
+
+interface BookingRequestRow {
+  booking_request_id: string;
+  rental_id: string;
+  tenant_id: string;
+  landlord_id: string;
+  tenant_name: string;
+  tenant_email: string;
+  tenant_phone: string;
+  tenant_message: string | null;
+  move_in_date: string;
+  stay_duration_months: number;
+  status: BookingStatus;
+  created_at: string;
+  reviewed_at: string | null;
+  review_message: string | null;
+  shared_landlord_phone: string | null;
+  shared_landlord_phone_at: string | null;
+  shared_location_url: string | null;
+  shared_location_at: string | null;
 }
 
 interface FavoriteRow {
@@ -243,88 +337,106 @@ const readPendingRoleFromStorage = (): UserRole | null => {
   return isUserRole(role) ? role : null;
 };
 
-const mapLegacyStatus = (status: unknown): BookingStatus => {
-  if (status === "approved" || status === "rejected" || status === "cancelled") {
-    return status;
-  }
-  if (status === "confirmed" || status === "completed") {
-    return "approved";
-  }
-  return "pending";
-};
-
-const toISOStringSafe = (value: unknown, fallback: string) => {
+const toIsoStringSafe = (value: unknown, fallback: string) => {
   if (typeof value !== "string") return fallback;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return fallback;
   return parsed.toISOString();
 };
 
-const getDurationFromLegacyDates = (checkIn: unknown, checkOut: unknown) => {
-  if (typeof checkIn !== "string" || typeof checkOut !== "string") {
-    return 6;
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const normalizeMoveInDate = (value: string) => {
+  if (DATE_ONLY_PATTERN.test(value)) {
+    return value;
   }
 
-  const start = new Date(checkIn);
-  const end = new Date(checkOut);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    return 6;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
   }
 
-  const monthsDiff =
-    (end.getFullYear() - start.getFullYear()) * 12 +
-    (end.getMonth() - start.getMonth());
-
-  return Math.max(1, monthsDiff || 1);
+  return parsed.toISOString().slice(0, 10);
 };
 
-const normalizeBooking = (booking: unknown): Booking | null => {
-  if (!booking || typeof booking !== "object") return null;
+const snapshotFromRentalRow = (
+  row: Pick<
+    RentalRow,
+    | "landlord_name"
+    | "landlord_email"
+    | "landlord_avatar_url"
+    | "landlord_phone_verified"
+  >,
+) =>
+  sanitizeLandlordSnapshot({
+    name: row.landlord_name ?? undefined,
+    email: row.landlord_email ?? undefined,
+    avatar: row.landlord_avatar_url ?? undefined,
+    verified: row.landlord_phone_verified ?? undefined,
+  });
 
-  const raw = booking as Partial<
-    Booking & { checkIn?: string; checkOut?: string; status?: string }
-  >;
-  const now = new Date().toISOString();
-  const moveInDate = toISOStringSafe(raw.moveInDate ?? raw.checkIn, now);
-  const stayDurationMonths =
-    typeof raw.stayDurationMonths === "number" && raw.stayDurationMonths > 0
-      ? raw.stayDurationMonths
-      : getDurationFromLegacyDates(raw.checkIn, raw.checkOut);
+const BOOKING_REQUEST_SELECT =
+  "booking_request_id, rental_id, tenant_id, landlord_id, tenant_name, tenant_email, tenant_phone, tenant_message, move_in_date, stay_duration_months, status, created_at, reviewed_at, review_message, shared_landlord_phone, shared_landlord_phone_at, shared_location_url, shared_location_at";
 
-  return {
-    id: typeof raw.id === "string" ? raw.id : `booking_${Date.now()}`,
-    roomId: typeof raw.roomId === "string" ? raw.roomId : "",
-    userId: typeof raw.userId === "string" ? raw.userId : "",
-    landlordId: typeof raw.landlordId === "string" ? raw.landlordId : "",
-    tenantName:
-      typeof raw.tenantName === "string" && raw.tenantName.trim()
-        ? raw.tenantName
-        : "Tenant",
-    tenantEmail:
-      typeof raw.tenantEmail === "string" && raw.tenantEmail.trim()
-        ? raw.tenantEmail
-        : "N/A",
-    tenantPhone:
-      typeof raw.tenantPhone === "string" && raw.tenantPhone.trim()
-        ? raw.tenantPhone
-        : "",
-    tenantMessage:
-      typeof raw.tenantMessage === "string" && raw.tenantMessage.trim()
-        ? raw.tenantMessage
-        : undefined,
-    moveInDate,
-    stayDurationMonths,
-    status: mapLegacyStatus(raw.status),
-    createdAt: toISOStringSafe(raw.createdAt, now),
-    reviewedAt:
-      typeof raw.reviewedAt === "string"
-        ? toISOStringSafe(raw.reviewedAt, now)
-        : undefined,
-    reviewMessage:
-      typeof raw.reviewMessage === "string" && raw.reviewMessage.trim()
-        ? raw.reviewMessage
-        : undefined,
-  };
+const RENTAL_SELECT =
+  "rental_id, user_id, rental_type, location, description, images, no_of_rooms, configuration, config_unit, rent, status, is_kitchen, bathroom_type, water_facility, landlord_name, landlord_email, landlord_avatar_url, landlord_phone_verified, created_at, updated_at";
+
+const RENTAL_PRIVATE_DETAILS_SELECT =
+  "rental_id, owner_user_id, google_maps_url";
+
+const mapBookingRequestRow = (row: BookingRequestRow): Booking => ({
+  id: row.booking_request_id,
+  roomId: row.rental_id,
+  userId: row.tenant_id,
+  landlordId: row.landlord_id,
+  tenantName: row.tenant_name,
+  tenantEmail: row.tenant_email,
+  tenantPhone: row.tenant_phone,
+  tenantMessage:
+    typeof row.tenant_message === "string" && row.tenant_message.trim()
+      ? row.tenant_message
+      : undefined,
+  moveInDate: row.move_in_date,
+  stayDurationMonths: row.stay_duration_months,
+  status: row.status,
+  createdAt: toIsoStringSafe(row.created_at, new Date().toISOString()),
+  reviewedAt:
+    typeof row.reviewed_at === "string"
+      ? toIsoStringSafe(row.reviewed_at, new Date().toISOString())
+      : undefined,
+  reviewMessage:
+    typeof row.review_message === "string" && row.review_message.trim()
+      ? row.review_message
+      : undefined,
+  sharedLandlordPhone:
+    typeof row.shared_landlord_phone === "string" &&
+    row.shared_landlord_phone.trim()
+      ? row.shared_landlord_phone
+      : undefined,
+  sharedLandlordPhoneAt:
+    typeof row.shared_landlord_phone_at === "string"
+      ? toIsoStringSafe(row.shared_landlord_phone_at, new Date().toISOString())
+      : undefined,
+  sharedLocationUrl:
+    typeof row.shared_location_url === "string" && row.shared_location_url.trim()
+      ? row.shared_location_url
+      : undefined,
+  sharedLocationAt:
+    typeof row.shared_location_at === "string"
+      ? toIsoStringSafe(row.shared_location_at, new Date().toISOString())
+      : undefined,
+});
+
+const persistPostedRooms = (rooms: Room[]) => {
+  if (typeof window === "undefined") return;
+  const sanitizedRooms = rooms.map((room) => ({
+    ...room,
+    google_maps_url: "",
+  }));
+  window.localStorage.setItem(
+    POSTED_ROOMS_STORAGE_KEY,
+    JSON.stringify(sanitizedRooms),
+  );
 };
 
 const toNumberSafe = (value: string | number) => {
@@ -341,7 +453,10 @@ const isUuid = (value: string) => UUID_PATTERN.test(value);
 const mapRentalRowToRoom = (
   row: RentalRow,
   landlordSnapshot?: LandlordSnapshot | null,
+  googleMapsUrl = "",
 ): Room | null => {
+  const persistedLandlordSnapshot = snapshotFromRentalRow(row);
+  const resolvedLandlordSnapshot = landlordSnapshot ?? persistedLandlordSnapshot;
   const roomCountText = row.no_of_rooms === 1 ? "1 room" : `${row.no_of_rooms} rooms`;
   const configurationLabel = getFlatConfigurationLabel({
     rental_type: row.rental_type,
@@ -362,6 +477,7 @@ const mapRentalRowToRoom = (
         ? row.description
         : fallbackDescription,
     location: row.location,
+    google_maps_url: googleMapsUrl,
     images: Array.isArray(row.images)
       ? row.images.filter((image): image is string => typeof image === "string")
       : [],
@@ -376,14 +492,100 @@ const mapRentalRowToRoom = (
     water_facility: row.water_facility,
     landlord: {
       id: row.user_id,
-      name: landlordSnapshot?.name ?? "Landlord",
-      email: landlordSnapshot?.email ?? "",
-      avatar: landlordSnapshot?.avatar ?? "",
-      verified: landlordSnapshot?.verified ?? false,
+      name: resolvedLandlordSnapshot?.name ?? "Landlord",
+      email: resolvedLandlordSnapshot?.email ?? "",
+      avatar: resolvedLandlordSnapshot?.avatar ?? "",
+      verified: resolvedLandlordSnapshot?.verified ?? false,
     },
     created_at: row.created_at,
     updated_at: row.updated_at,
   });
+};
+
+const syncLandlordRentalSnapshot = async ({
+  supabase,
+  nextUser,
+}: {
+  supabase: SupabaseClient | null;
+  nextUser: User;
+}) => {
+  if (!supabase || nextUser.role !== "landlord") {
+    return;
+  }
+
+  await supabase
+    .from("rentals")
+    .update({
+      landlord_name: nextUser.name.trim() || "Landlord",
+      landlord_email: nextUser.email.trim(),
+      landlord_avatar_url: nextUser.avatar.trim(),
+      landlord_phone_verified: nextUser.verified,
+    })
+    .eq("user_id", nextUser.id);
+};
+
+const upsertRentalPrivateDetails = async ({
+  supabase,
+  userId,
+  rentalId,
+  googleMapsUrl,
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  rentalId: string;
+  googleMapsUrl: string;
+}) => {
+  return supabase.from("rental_private_details").upsert(
+    {
+      rental_id: rentalId,
+      owner_user_id: userId,
+      google_maps_url: googleMapsUrl,
+    },
+    { onConflict: "rental_id" },
+  );
+};
+
+const buildRentalPayload = ({
+  user,
+  room,
+  fallbackStatus = "available" as const,
+}: {
+  user: User;
+  room: NewRoomInput;
+  fallbackStatus?: Room["status"];
+}) => {
+  const normalizedRoomCount =
+    room.rental_type === "flat"
+      ? Math.max(1, room.config_unit ?? room.no_of_rooms)
+      : room.rental_type === "single_room"
+        ? 1
+        : Math.max(1, room.no_of_rooms);
+  const normalizedConfiguration =
+    room.rental_type === "flat" ? (room.configuration ?? "bhk") : null;
+  const normalizedConfigUnit =
+    room.rental_type === "flat"
+      ? Math.max(1, room.config_unit ?? normalizedRoomCount)
+      : null;
+
+  return {
+    user_id: user.id,
+    rental_type: room.rental_type,
+    location: room.location,
+    description: room.description,
+    images: room.images,
+    no_of_rooms: normalizedRoomCount,
+    configuration: normalizedConfiguration,
+    config_unit: normalizedConfigUnit,
+    rent: room.rent,
+    status: fallbackStatus,
+    is_kitchen: room.rental_type === "flat" ? true : room.is_kitchen,
+    bathroom_type: room.bathroom_type,
+    water_facility: room.water_facility,
+    landlord_name: user.name.trim() || "Landlord",
+    landlord_email: user.email.trim(),
+    landlord_avatar_url: user.avatar.trim(),
+    landlord_phone_verified: user.verified,
+  };
 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -407,7 +609,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(LEGACY_USER_STORAGE_KEY);
     const savedFavorites = localStorage.getItem(FAVORITES_STORAGE_KEY);
     const savedRooms = localStorage.getItem(POSTED_ROOMS_STORAGE_KEY);
-    const savedBookings = localStorage.getItem(BOOKING_STORAGE_KEY);
     const savedLandlordSnapshots = readLandlordSnapshotsFromStorage();
 
     if (ENABLE_FAVORITES && savedFavorites) {
@@ -454,22 +655,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem(POSTED_ROOMS_STORAGE_KEY);
       }
     }
-    if (ENABLE_BOOKING_REQUESTS && savedBookings) {
-      try {
-        const parsedBookings = JSON.parse(savedBookings);
-        if (Array.isArray(parsedBookings)) {
-          const normalized = parsedBookings
-            .map((booking) => normalizeBooking(booking))
-            .filter((booking): booking is Booking => booking !== null);
-          setBookings(normalized);
-          localStorage.setItem(BOOKING_STORAGE_KEY, JSON.stringify(normalized));
-        }
-      } catch {
-        localStorage.removeItem(BOOKING_STORAGE_KEY);
-      }
-    } else if (!ENABLE_BOOKING_REQUESTS) {
-      localStorage.removeItem(BOOKING_STORAGE_KEY);
-    }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -483,9 +668,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fetchRentals = async () => {
       const { data, error } = await supabase
         .from("rentals")
-        .select(
-          "rental_id, user_id, rental_type, location, description, images, no_of_rooms, configuration, config_unit, rent, status, is_kitchen, bathroom_type, water_facility, created_at, updated_at",
-        )
+        .select(RENTAL_SELECT)
         .order("created_at", { ascending: false });
 
       if (error || !data || !isMounted) {
@@ -493,6 +676,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const rentalRows = data as RentalRow[];
+      let privateDetailsByRentalId: Record<string, string> = {};
+
+      if (user?.role === "landlord") {
+        const { data: privateDetailsData } = await supabase
+          .from("rental_private_details")
+          .select(RENTAL_PRIVATE_DETAILS_SELECT)
+          .eq("owner_user_id", user.id);
+
+        privateDetailsByRentalId =
+          (privateDetailsData as RentalPrivateDetailRow[] | null | undefined)
+            ?.reduce<Record<string, string>>((acc, detail) => {
+              if (
+                typeof detail.rental_id === "string" &&
+                typeof detail.google_maps_url === "string"
+              ) {
+                acc[detail.rental_id] = detail.google_maps_url;
+              }
+              return acc;
+            }, {}) ?? {};
+      }
+
       setPostedRooms((prev) => {
         const previousRoomMap = new Map(
           prev.map((room) => [room.rental_id, room] as const),
@@ -503,6 +707,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const previousRoom = previousRoomMap.get(row.rental_id);
             const currentUserSnapshot =
               user && user.id === row.user_id ? snapshotFromUser(user) : null;
+            const rowSnapshot = snapshotFromRentalRow(row);
             const cachedSnapshot = landlordSnapshotsByUserId[row.user_id] ?? null;
             const previousSnapshot = sanitizeLandlordSnapshot(
               previousRoom?.landlord,
@@ -510,15 +715,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             return mapRentalRowToRoom(
               row,
-              currentUserSnapshot ?? cachedSnapshot ?? previousSnapshot,
+              currentUserSnapshot ??
+                rowSnapshot ??
+                cachedSnapshot ??
+                previousSnapshot,
+              row.user_id === user?.id
+                ? privateDetailsByRentalId[row.rental_id] ?? ""
+                : "",
             );
           })
           .filter((room): room is Room => room !== null);
 
-        localStorage.setItem(
-          POSTED_ROOMS_STORAGE_KEY,
-          JSON.stringify(mappedRooms),
-        );
+        persistPostedRooms(mappedRooms);
         return mappedRooms;
       });
     };
@@ -598,6 +806,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [supabase, user]);
 
   useEffect(() => {
+    if (!ENABLE_BOOKING_REQUESTS || !user || !supabase) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchBookings = async () => {
+      let query = supabase
+        .from("booking_requests")
+        .select(BOOKING_REQUEST_SELECT)
+        .order("created_at", { ascending: false });
+
+      query =
+        user.role === "landlord"
+          ? query.eq("landlord_id", user.id)
+          : query.eq("tenant_id", user.id);
+
+      const { data, error } = await query;
+
+      if (error || !isMounted) {
+        return;
+      }
+
+      const nextBookings =
+        (data as BookingRequestRow[] | null | undefined)?.map(
+          mapBookingRequestRow,
+        ) ?? [];
+      setBookings(nextBookings);
+    };
+
+    void fetchBookings();
+
+    const filter =
+      user.role === "landlord"
+        ? `landlord_id=eq.${user.id}`
+        : `tenant_id=eq.${user.id}`;
+
+    const bookingRequestsChannel = supabase
+      .channel(`booking_requests_${user.role}_${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "booking_requests",
+          filter,
+        },
+        () => {
+          void fetchBookings();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(bookingRequestsChannel);
+    };
+  }, [supabase, user]);
+
+  useEffect(() => {
     if (!supabase) {
       return;
     }
@@ -638,6 +906,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!authUser) {
         setUser(null);
         setFavorites([]);
+        setBookings([]);
         localStorage.removeItem(FAVORITES_STORAGE_KEY);
         return;
       }
@@ -696,6 +965,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           persistLandlordSnapshots(nextSnapshots);
           return nextSnapshots;
         });
+        void syncLandlordRentalSnapshot({ supabase, nextUser });
       }
     };
 
@@ -750,6 +1020,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     setUser(null);
     setFavorites([]);
+    setBookings([]);
     localStorage.removeItem(FAVORITES_STORAGE_KEY);
     localStorage.removeItem(PENDING_ROLE_STORAGE_KEY);
     if (supabase) {
@@ -800,6 +1071,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           { onConflict: "id" },
         );
       }
+
+      void syncLandlordRentalSnapshot({ supabase, nextUser: updatedUser });
     }
   };
 
@@ -885,6 +1158,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   };
 
+  const upsertLocalRoom = (nextRoom: Room) => {
+    setPostedRooms((prev) => {
+      const nextRooms = [
+        nextRoom,
+        ...prev.filter((item) => item.rental_id !== nextRoom.rental_id),
+      ];
+      persistPostedRooms(nextRooms);
+      return nextRooms;
+    });
+  };
+
+  const removeLocalRoom = (roomId: string) => {
+    setPostedRooms((prev) => {
+      const nextRooms = prev.filter((item) => item.rental_id !== roomId);
+      persistPostedRooms(nextRooms);
+      return nextRooms;
+    });
+  };
+
   const addRoom = async (room: NewRoomInput): Promise<AddRoomResult> => {
     if (!supabase) {
       return { success: false, error: "Supabase client is unavailable." };
@@ -894,41 +1186,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { success: false, error: "Only landlords can post rentals." };
     }
 
-    const normalizedRoomCount =
-      room.rental_type === "flat"
-        ? Math.max(1, room.config_unit ?? room.no_of_rooms)
-        : room.rental_type === "single_room"
-          ? 1
-          : Math.max(1, room.no_of_rooms);
-    const normalizedConfiguration =
-      room.rental_type === "flat" ? (room.configuration ?? "bhk") : null;
-    const normalizedConfigUnit =
-      room.rental_type === "flat"
-        ? Math.max(1, room.config_unit ?? normalizedRoomCount)
-        : null;
-
-    const insertPayload = {
-      user_id: user.id,
-      rental_type: room.rental_type,
-      location: room.location,
-      description: room.description,
-      images: room.images,
-      no_of_rooms: normalizedRoomCount,
-      configuration: normalizedConfiguration,
-      config_unit: normalizedConfigUnit,
-      rent: room.rent,
-      status: "available" as const,
-      is_kitchen: room.rental_type === "flat" ? true : room.is_kitchen,
-      bathroom_type: room.bathroom_type,
-      water_facility: room.water_facility,
-    };
+    const normalizedGoogleMapsUrl = normalizeGoogleMapsUrl(room.google_maps_url);
+    if (normalizedGoogleMapsUrl === null) {
+      return {
+        success: false,
+        error: "Please enter a valid Google Maps share URL.",
+      };
+    }
 
     const { data, error } = await supabase
       .from("rentals")
-      .insert(insertPayload)
-      .select(
-        "rental_id, user_id, rental_type, location, description, images, no_of_rooms, configuration, config_unit, rent, status, is_kitchen, bathroom_type, water_facility, created_at, updated_at",
-      )
+      .insert(buildRentalPayload({ user, room }))
+      .select(RENTAL_SELECT)
       .single();
 
     if (error || !data) {
@@ -938,9 +1207,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     }
 
+    const { error: privateDetailsError } = await upsertRentalPrivateDetails({
+      supabase,
+      userId: user.id,
+      rentalId: (data as RentalRow).rental_id,
+      googleMapsUrl: normalizedGoogleMapsUrl,
+    });
+
+    if (privateDetailsError) {
+      return {
+        success: false,
+        error: privateDetailsError.message || "Failed to save the Google Maps pin.",
+      };
+    }
+
     const normalizedRoom = mapRentalRowToRoom(
       data as RentalRow,
       snapshotFromUser(user),
+      normalizedGoogleMapsUrl,
     );
     if (!normalizedRoom) {
       return {
@@ -949,21 +1233,203 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    setPostedRooms((prev) => {
-      const newRooms = [
-        normalizedRoom,
-        ...prev.filter((item) => item.rental_id !== normalizedRoom.rental_id),
-      ];
-      localStorage.setItem(POSTED_ROOMS_STORAGE_KEY, JSON.stringify(newRooms));
-      return newRooms;
-    });
+    upsertLocalRoom(normalizedRoom);
 
     return { success: true, room: normalizedRoom };
   };
 
-  const addBooking = (booking: NewBookingInput) => {
+  const updateRoom = async (
+    roomId: string,
+    room: NewRoomInput,
+  ): Promise<RoomMutationResult> => {
+    if (!supabase) {
+      return { success: false, error: "Supabase client is unavailable." };
+    }
+
+    if (!user || user.role !== "landlord") {
+      return { success: false, error: "Only landlords can update rentals." };
+    }
+
+    const existingRoom = postedRooms.find((item) => item.rental_id === roomId);
+    if (!existingRoom || existingRoom.user_id !== user.id) {
+      return { success: false, error: "Rental listing not found." };
+    }
+
+    const normalizedGoogleMapsUrl = normalizeGoogleMapsUrl(room.google_maps_url);
+    if (normalizedGoogleMapsUrl === null) {
+      return {
+        success: false,
+        error: "Please enter a valid Google Maps share URL.",
+      };
+    }
+
+    const { data, error } = await supabase
+      .from("rentals")
+      .update(
+        buildRentalPayload({
+          user,
+          room,
+          fallbackStatus: existingRoom.status,
+        }),
+      )
+      .eq("rental_id", roomId)
+      .eq("user_id", user.id)
+      .select(RENTAL_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: error?.message || "Failed to update rental listing.",
+      };
+    }
+
+    const { error: privateDetailsError } = await upsertRentalPrivateDetails({
+      supabase,
+      userId: user.id,
+      rentalId: roomId,
+      googleMapsUrl: normalizedGoogleMapsUrl,
+    });
+
+    if (privateDetailsError) {
+      return {
+        success: false,
+        error: privateDetailsError.message || "Failed to save the Google Maps pin.",
+      };
+    }
+
+    const normalizedRoom = mapRentalRowToRoom(
+      data as RentalRow,
+      snapshotFromUser(user),
+      normalizedGoogleMapsUrl,
+    );
+    if (!normalizedRoom) {
+      return {
+        success: false,
+        error: "Rental was updated but could not be mapped for display.",
+      };
+    }
+
+    upsertLocalRoom(normalizedRoom);
+
+    return { success: true, room: normalizedRoom };
+  };
+
+  const updateRoomStatus = async (
+    roomId: string,
+    status: Room["status"],
+  ): Promise<RoomMutationResult> => {
+    if (!supabase) {
+      return { success: false, error: "Supabase client is unavailable." };
+    }
+
+    if (!user || user.role !== "landlord") {
+      return { success: false, error: "Only landlords can update listing status." };
+    }
+
+    const existingRoom = postedRooms.find((item) => item.rental_id === roomId);
+    if (!existingRoom || existingRoom.user_id !== user.id) {
+      return { success: false, error: "Rental listing not found." };
+    }
+
+    const { data, error } = await supabase
+      .from("rentals")
+      .update({ status })
+      .eq("rental_id", roomId)
+      .eq("user_id", user.id)
+      .select(RENTAL_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: error?.message || "Failed to update listing status.",
+      };
+    }
+
+    const normalizedRoom = mapRentalRowToRoom(
+      data as RentalRow,
+      snapshotFromUser(user),
+      existingRoom.google_maps_url,
+    );
+    if (!normalizedRoom) {
+      return {
+        success: false,
+        error: "Listing status was updated but could not be mapped for display.",
+      };
+    }
+
+    upsertLocalRoom(normalizedRoom);
+
+    return { success: true, room: normalizedRoom };
+  };
+
+  const deleteRoom = async (roomId: string): Promise<RoomActionResult> => {
+    if (!supabase) {
+      return { success: false, error: "Supabase client is unavailable." };
+    }
+
+    if (!user || user.role !== "landlord") {
+      return { success: false, error: "Only landlords can delete rentals." };
+    }
+
+    const { error } = await supabase
+      .from("rentals")
+      .delete()
+      .eq("rental_id", roomId)
+      .eq("user_id", user.id);
+
+    if (error) {
+      return {
+        success: false,
+        error: error.message || "Failed to delete rental listing.",
+      };
+    }
+
+    removeLocalRoom(roomId);
+
+    return { success: true };
+  };
+
+  const addBooking = async (
+    booking: NewBookingInput,
+  ): Promise<BookingRequestResult> => {
     if (!ENABLE_BOOKING_REQUESTS) {
-      return false;
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
+    }
+
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    if (
+      !user ||
+      user.role !== "tenant" ||
+      user.id !== booking.userId ||
+      booking.landlordId === user.id
+    ) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only verified tenant accounts can send booking requests.",
+      };
+    }
+
+    const normalizedMoveInDate = normalizeMoveInDate(booking.moveInDate);
+    if (!normalizedMoveInDate) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Please select a valid move-in date.",
+      };
     }
 
     const hasActiveRequest = bookings.some(
@@ -974,55 +1440,423 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           existingBooking.status === "approved"),
     );
     if (hasActiveRequest) {
-      return false;
+      return {
+        success: false,
+        code: "duplicate",
+        error: "You already have an active request for this listing.",
+      };
     }
 
-    const newBooking: Booking = {
-      ...booking,
-      id: `booking_${Date.now()}`,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    };
-    const newBookings = [...bookings, newBooking];
-    setBookings(newBookings);
-    localStorage.setItem(BOOKING_STORAGE_KEY, JSON.stringify(newBookings));
-    return true;
+    const { data, error } = await supabase
+      .from("booking_requests")
+      .insert({
+        rental_id: booking.roomId,
+        tenant_id: booking.userId,
+        landlord_id: booking.landlordId,
+        tenant_name: booking.tenantName.trim() || "Tenant",
+        tenant_email: booking.tenantEmail.trim(),
+        tenant_phone: booking.tenantPhone.trim(),
+        tenant_message: booking.tenantMessage?.trim() || null,
+        move_in_date: normalizedMoveInDate,
+        stay_duration_months: booking.stayDurationMonths,
+      })
+      .select(BOOKING_REQUEST_SELECT)
+      .single();
+
+    if (error || !data) {
+      const isDuplicate =
+        error?.code === "23505" ||
+        error?.message?.includes("booking_requests_one_active_request_idx");
+
+      return {
+        success: false,
+        code: isDuplicate ? "duplicate" : "error",
+        error: isDuplicate
+          ? "You already have an active request for this listing."
+          : error?.message || "Failed to send booking request.",
+      };
+    }
+
+    const nextBooking = mapBookingRequestRow(data as BookingRequestRow);
+    setBookings((prev) => [
+      nextBooking,
+      ...prev.filter((item) => item.id !== nextBooking.id),
+    ]);
+
+    return { success: true, booking: nextBooking };
   };
 
-  const cancelBooking = (bookingId: string) => {
+  const cancelBooking = async (
+    bookingId: string,
+  ): Promise<BookingMutationResult> => {
     if (!ENABLE_BOOKING_REQUESTS) {
-      return;
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
     }
 
-    const newBookings = bookings.map((b) =>
-      b.id === bookingId ? { ...b, status: "cancelled" as const } : b,
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    const currentBooking = bookings.find((booking) => booking.id === bookingId);
+    if (!currentBooking) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Booking request not found.",
+      };
+    }
+
+    if (!user || user.id !== currentBooking.userId) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only the tenant can cancel this request.",
+      };
+    }
+
+    if (
+      currentBooking.status !== "pending" &&
+      currentBooking.status !== "approved"
+    ) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Only active requests can be cancelled.",
+      };
+    }
+
+    const { data, error } = await supabase
+      .from("booking_requests")
+      .update({ status: "cancelled" as const })
+      .eq("booking_request_id", bookingId)
+      .select(BOOKING_REQUEST_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        code: "error",
+        error: error?.message || "Failed to cancel booking request.",
+      };
+    }
+
+    const nextBooking = mapBookingRequestRow(data as BookingRequestRow);
+    setBookings((prev) =>
+      prev.map((booking) => (booking.id === nextBooking.id ? nextBooking : booking)),
     );
-    setBookings(newBookings);
-    localStorage.setItem(BOOKING_STORAGE_KEY, JSON.stringify(newBookings));
+
+    return { success: true };
   };
 
-  const updateBookingStatus = (
+  const updateBookingStatus = async (
     bookingId: string,
     status: "approved" | "rejected",
     reviewMessage?: string,
-  ) => {
+  ): Promise<BookingMutationResult> => {
     if (!ENABLE_BOOKING_REQUESTS) {
-      return;
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
+    }
+
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    const currentBooking = bookings.find((booking) => booking.id === bookingId);
+    if (!currentBooking) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Booking request not found.",
+      };
+    }
+
+    if (!user || user.id !== currentBooking.landlordId) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only the landlord can review this request.",
+      };
+    }
+
+    if (currentBooking.status !== "pending") {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Only pending requests can be reviewed.",
+      };
     }
 
     const reviewedAt = new Date().toISOString();
-    const newBookings = bookings.map((b) =>
-      b.id === bookingId
-        ? {
-            ...b,
-            status,
-            reviewedAt,
-            reviewMessage: reviewMessage?.trim() || undefined,
-          }
-        : b,
+    const { data, error } = await supabase
+      .from("booking_requests")
+      .update({
+        status,
+        reviewed_at: reviewedAt,
+        review_message: reviewMessage?.trim() || null,
+      })
+      .eq("booking_request_id", bookingId)
+      .select(BOOKING_REQUEST_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        code: "error",
+        error: error?.message || "Failed to update booking request.",
+      };
+    }
+
+    const nextBooking = mapBookingRequestRow(data as BookingRequestRow);
+    setBookings((prev) =>
+      prev.map((booking) => (booking.id === nextBooking.id ? nextBooking : booking)),
     );
-    setBookings(newBookings);
-    localStorage.setItem(BOOKING_STORAGE_KEY, JSON.stringify(newBookings));
+
+    return { success: true };
+  };
+
+  const deleteBooking = async (
+    bookingId: string,
+  ): Promise<BookingMutationResult> => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
+    }
+
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    const currentBooking = bookings.find((booking) => booking.id === bookingId);
+    if (!currentBooking) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Booking request not found.",
+      };
+    }
+
+    if (!user || user.id !== currentBooking.userId) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only the tenant can delete this request.",
+      };
+    }
+
+    if (currentBooking.status !== "cancelled") {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Only cancelled requests can be deleted.",
+      };
+    }
+
+    const { error } = await supabase
+      .from("booking_requests")
+      .delete()
+      .eq("booking_request_id", bookingId)
+      .eq("tenant_id", user.id);
+
+    if (error) {
+      return {
+        success: false,
+        code: "error",
+        error: error.message || "Failed to delete booking request.",
+      };
+    }
+
+    setBookings((prev) => prev.filter((booking) => booking.id !== bookingId));
+
+    return { success: true };
+  };
+
+  const shareBookingContact = async (
+    bookingId: string,
+  ): Promise<BookingMutationResult> => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
+    }
+
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    const currentBooking = bookings.find((booking) => booking.id === bookingId);
+    if (!currentBooking) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Booking request not found.",
+      };
+    }
+
+    if (!user || user.id !== currentBooking.landlordId) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only the landlord can share contact details.",
+      };
+    }
+
+    if (
+      currentBooking.status !== "pending" &&
+      currentBooking.status !== "approved"
+    ) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Contact can only be shared for pending or approved requests.",
+      };
+    }
+
+    const normalizedSharedPhone = normalizeNepaliPhone(user.phone ?? "");
+    if (!normalizedSharedPhone) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Verify your landlord phone number before sharing it.",
+      };
+    }
+
+    const sharedLandlordPhoneAt = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("booking_requests")
+      .update({
+        shared_landlord_phone: normalizedSharedPhone,
+        shared_landlord_phone_at: sharedLandlordPhoneAt,
+      })
+      .eq("booking_request_id", bookingId)
+      .select(BOOKING_REQUEST_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        code: "error",
+        error: error?.message || "Failed to share landlord contact number.",
+      };
+    }
+
+    const nextBooking = mapBookingRequestRow(data as BookingRequestRow);
+    setBookings((prev) =>
+      prev.map((booking) => (booking.id === nextBooking.id ? nextBooking : booking)),
+    );
+
+    return { success: true };
+  };
+
+  const shareBookingLocation = async (
+    bookingId: string,
+    sharedLocationUrl: string,
+  ): Promise<BookingMutationResult> => {
+    if (!ENABLE_BOOKING_REQUESTS) {
+      return {
+        success: false,
+        code: "disabled",
+        error: "Booking requests are currently disabled.",
+      };
+    }
+
+    if (!supabase) {
+      return {
+        success: false,
+        code: "unavailable",
+        error: "Supabase client is unavailable.",
+      };
+    }
+
+    const currentBooking = bookings.find((booking) => booking.id === bookingId);
+    if (!currentBooking) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Booking request not found.",
+      };
+    }
+
+    if (!user || user.id !== currentBooking.landlordId) {
+      return {
+        success: false,
+        code: "unauthorized",
+        error: "Only the landlord can share the rental location.",
+      };
+    }
+
+    if (currentBooking.status !== "approved") {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Approve the request before sharing the exact location.",
+      };
+    }
+
+    const normalizedSharedLocationUrl =
+      normalizeGoogleMapsUrl(sharedLocationUrl);
+    if (!normalizedSharedLocationUrl) {
+      return {
+        success: false,
+        code: "invalid",
+        error: "Add a valid Google Maps pin to the listing before sharing it.",
+      };
+    }
+
+    const sharedLocationAt = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("booking_requests")
+      .update({
+        status: "approved" as const,
+        shared_location_url: normalizedSharedLocationUrl,
+        shared_location_at: sharedLocationAt,
+      })
+      .eq("booking_request_id", bookingId)
+      .select(BOOKING_REQUEST_SELECT)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        code: "error",
+        error: error?.message || "Failed to share the Google Maps location.",
+      };
+    }
+
+    const nextBooking = mapBookingRequestRow(data as BookingRequestRow);
+    setBookings((prev) =>
+      prev.map((booking) => (booking.id === nextBooking.id ? nextBooking : booking)),
+    );
+
+    return { success: true };
   };
 
   return (
@@ -1037,9 +1871,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         removeFavorite,
         postedRooms,
         addRoom,
+        updateRoom,
+        updateRoomStatus,
+        deleteRoom,
         bookings,
         addBooking,
         cancelBooking,
+        deleteBooking,
+        shareBookingContact,
+        shareBookingLocation,
         updateBookingStatus,
       }}
     >
