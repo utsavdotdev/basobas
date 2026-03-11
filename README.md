@@ -14,9 +14,24 @@ BasoBas now uses **Supabase-only backend infrastructure**.
 
 ## Docs
 
-- [Supabase-Only Backend Guide](./docs/supabase-backend-guide.md)
-- [Proposal Report: User and Rental Entity Core Attributes](./docs/proposal-user-rental-entity-attributes.md)
-- [BasoBas Viva Guide](./docs/viva-guide-basobas.md)
+- [General Guide](./docs/general.md)
+
+## Docs Site
+
+This repo now includes a VitePress docs site powered by the `docs/` folder.
+
+Local commands:
+
+```bash
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
+```
+
+GitHub Pages deployment:
+
+- The workflow at `.github/workflows/docs.yml` builds and deploys docs on pushes to `main`.
+- Enable GitHub Pages in the repository settings and set the source to `GitHub Actions`.
 
 ## Quick Start
 

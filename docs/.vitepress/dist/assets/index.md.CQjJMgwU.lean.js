@@ -1,0 +1,1 @@
+import{_ as e,o as s,c as i,ai as l}from"./chunks/framework.Bke2s2V8.js";const b=JSON.parse('{"title":"BasoBas Docs","description":"","frontmatter":{},"headers":[],"relativePath":"index.md","filePath":"index.md"}'),t={name:"index.md"};function o(r,a,n,c,d,h){return s(),i("div",null,[...a[0]||(a[0]=[l("",7)])])}const _=e(t,[["render",o]]);export{b as __pageData,_ as default};
