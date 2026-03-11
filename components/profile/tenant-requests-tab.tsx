@@ -128,7 +128,9 @@ export function TenantRequestsTab({
                   </div>
                 ) : null}
 
-                {booking.sharedLocationUrl && (
+                {booking.sharedLocationUrl &&
+                (booking.status === "pending" ||
+                  booking.status === "approved") && (
                   <div className="rounded-md border border-green-200 bg-green-50/80 px-3 py-2 text-sm text-green-800">
                     Exact location shared by landlord.
                   </div>
@@ -148,7 +150,9 @@ export function TenantRequestsTab({
                     </a>
                   </Button>
                 ) : null}
-                {booking.sharedLocationUrl ? (
+                {booking.sharedLocationUrl &&
+                (booking.status === "pending" ||
+                  booking.status === "approved") ? (
                   <Button asChild size="sm" className="h-8">
                     <a
                       href={booking.sharedLocationUrl}

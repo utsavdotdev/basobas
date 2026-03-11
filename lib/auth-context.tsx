@@ -1813,11 +1813,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    if (currentBooking.status !== "approved") {
+    if (
+      currentBooking.status !== "pending" &&
+      currentBooking.status !== "approved"
+    ) {
       return {
         success: false,
         code: "invalid",
-        error: "Approve the request before sharing the exact location.",
+        error: "Location can only be shared for pending or approved requests.",
       };
     }
 
@@ -1835,7 +1838,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase
       .from("booking_requests")
       .update({
-        status: "approved" as const,
         shared_location_url: normalizedSharedLocationUrl,
         shared_location_at: sharedLocationAt,
       })

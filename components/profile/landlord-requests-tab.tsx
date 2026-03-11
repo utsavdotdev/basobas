@@ -177,7 +177,9 @@ export function LandlordRequestsTab({
                         </div>
                       ) : null}
 
-                      {booking.sharedLocationUrl && (
+                      {booking.sharedLocationUrl &&
+                      (booking.status === "pending" ||
+                        booking.status === "approved") && (
                         <div className="rounded-md border border-green-200 bg-green-50/80 px-3 py-2 text-sm text-green-800">
                           Exact location shared on{" "}
                           {formatDate(booking.sharedLocationAt ?? booking.createdAt)}.
@@ -269,7 +271,9 @@ export function LandlordRequestsTab({
                         </Button>
                       )}
 
-                      {booking.sharedLocationUrl ? (
+                      {booking.sharedLocationUrl &&
+                      (booking.status === "pending" ||
+                        booking.status === "approved") ? (
                         <Button
                           asChild
                           variant="outline"
@@ -285,7 +289,8 @@ export function LandlordRequestsTab({
                             Shared Map
                           </a>
                         </Button>
-                      ) : booking.status === "approved" ? (
+                      ) : booking.status === "pending" ||
+                        booking.status === "approved" ? (
                         room.google_maps_url ? (
                           <Button
                             size="sm"

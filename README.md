@@ -16,6 +16,7 @@ BasoBas now uses **Supabase-only backend infrastructure**.
 
 - [Supabase-Only Backend Guide](./docs/supabase-backend-guide.md)
 - [Proposal Report: User and Rental Entity Core Attributes](./docs/proposal-user-rental-entity-attributes.md)
+- [BasoBas Viva Guide](./docs/viva-guide-basobas.md)
 
 ## Quick Start
 
