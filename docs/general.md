@@ -350,8 +350,6 @@ Stores all booking requests sent by tenants.
 ### `rental_favorites`
 Stores tenant favorite rentals.
 
-### `phone_verification_challenges`
-Stores OTP verification records.
 
 ### `rental_private_details`
 Stores private landlord-only details like exact Google Maps pin.
